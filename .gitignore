@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+.eslintcache
+*.log
+.DS_Store
+storybook-static/
+/.envrc
+/.npmrc
+
+# Codecov uploader artifacts
+codecov
+codecov.SHA256SUM
+codecov.SHA256SUM.sig
