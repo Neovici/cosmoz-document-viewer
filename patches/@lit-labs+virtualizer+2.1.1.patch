@@ -1,0 +1,94 @@
+diff --git a/node_modules/@lit-labs/virtualizer/Virtualizer.d.ts b/node_modules/@lit-labs/virtualizer/Virtualizer.d.ts
+--- a/node_modules/@lit-labs/virtualizer/Virtualizer.d.ts
++++ b/node_modules/@lit-labs/virtualizer/Virtualizer.d.ts
+@@ -210,5 +210,9 @@
+     private _hostElementSizeChanged;
+     private _childLoaded;
+     private _childrenSizeChanged;
++    /** Clears the metrics cache and forces a full re-layout. Called on container
++     * resize so stale cached page heights (which change when width changes due
++     * to height:auto images) don't cause misaligned scroll positions. */
++    invalidateAndRemeasure(): void;
+ }
+ //# sourceMappingURL=Virtualizer.d.ts.map
+\ No newline at end of file
+diff --git a/node_modules/@lit-labs/virtualizer/Virtualizer.js b/node_modules/@lit-labs/virtualizer/Virtualizer.js
+--- a/node_modules/@lit-labs/virtualizer/Virtualizer.js
++++ b/node_modules/@lit-labs/virtualizer/Virtualizer.js
+@@ -505,7 +505,12 @@
+         }
+         else {
+             const style = this._hostElement.style;
+-            style.minWidth = h ? `${h}px` : '100%';
++            // Allow the component to override minWidth via data-minWidth so that
++            // zoomed-in pages can exceed the container width and trigger a real
++            // horizontal scrollbar. Without this the virtualizer clamps the host
++            // to '100%' and hides overflow.
++            const minWidthOverride = this._hostElement.dataset.minWidth;
++            style.minWidth = minWidthOverride ?? (h ? `${h}px` : '100%');
+             style.minHeight = v ? `${v}px` : '100%';
+         }
+     }
+@@ -679,6 +684,17 @@
+         this._itemsChanged = false;
+         this._rangeChanged = false;
+     }
++    invalidateAndRemeasure() {
++        // Clears the metrics cache and forces a full re-layout. Called on
++        // container resize so stale cached page heights (which change when width
++        // changes due to height:auto images) don't cause misaligned scroll
++        // positions.
++        if (this._layout?._metricsCache) {
++            this._layout._metricsCache.clear();
++        }
++        this._itemsChanged = true;
++        this._schedule(this._updateLayout);
++    }
+ }
+ function getMargins(el) {
+     const style = window.getComputedStyle(el);
+diff --git a/node_modules/@lit-labs/virtualizer/layouts/flow.d.ts b/node_modules/@lit-labs/virtualizer/layouts/flow.d.ts
+--- a/node_modules/@lit-labs/virtualizer/layouts/flow.d.ts
++++ b/node_modules/@lit-labs/virtualizer/layouts/flow.d.ts
+@@ -15,8 +15,9 @@
+ };
+ type FlowLayoutSpecifier = BaseLayoutConfig & {
+     type: FlowLayoutConstructor;
++    estimatedItemHeight?: number;
+ };
+-type FlowLayoutSpecifierFactory = (config?: BaseLayoutConfig) => FlowLayoutSpecifier;
++type FlowLayoutSpecifierFactory = (config?: BaseLayoutConfig & { estimatedItemHeight?: number }) => FlowLayoutSpecifier;
+ export declare const flow: FlowLayoutSpecifierFactory;
+ declare class MetricsCache {
+     private _childSizeCache;
+@@ -70,6 +71,11 @@
+     private _measureChildren;
+     _estimate: boolean;
+     get measureChildren(): boolean;
++    /** Override the default 100px item height estimate. Without this,
++     * virtualizer estimates all pages fit in a small total height and renders
++     * and fetches all of them on mount instead of only the visible ones. */
++    set estimatedItemHeight(h: number);
++    get estimatedItemHeight(): number;
+     /**
+      * Determine the average size of all children represented in the sizes
+      * argument.
+diff --git a/node_modules/@lit-labs/virtualizer/layouts/flow.js b/node_modules/@lit-labs/virtualizer/layouts/flow.js
+--- a/node_modules/@lit-labs/virtualizer/layouts/flow.js
++++ b/node_modules/@lit-labs/virtualizer/layouts/flow.js
+@@ -115,6 +115,15 @@
+     get measureChildren() {
+         return this._measureChildren;
+     }
++    set estimatedItemHeight(h) {
++        // Override the default 100px item height estimate. Without this,
++        // virtualizer estimates all pages fit in a small total height and
++        // renders/fetches all of them on mount instead of only visible ones.
++        if (h > 0) this._itemSize.height = h;
++    }
++    get estimatedItemHeight() {
++        return this._itemSize.height;
++    }
+     /**
+      * Determine the average size of all children represented in the sizes
+      * argument.
