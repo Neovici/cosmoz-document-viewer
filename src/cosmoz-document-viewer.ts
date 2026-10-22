@@ -17,6 +17,7 @@ import { ref } from 'lit-html/directives/ref.js';
 import { DEFAULT_NATURAL_WIDTH } from './cosmoz-document-viewer-page';
 import { useCurrentPage } from './use-current-page';
 import { useDragPan } from './use-drag-pan';
+import { usePinchZoom } from './use-pinch-zoom';
 import { useZoomAnchor } from './use-zoom-anchor';
 import { roundToStep, ZOOM_IN_STEP, ZOOM_OUT_STEP } from './zoom-model';
 
@@ -61,6 +62,9 @@ const styles = css`
 		overflow: auto;
 		scrollbar-gutter: stable;
 		padding: 0;
+		/* Touch pan/pinch is app-owned (use-pinch-zoom); fling decay stands
+		 * in for native touch scrolling inertia. */
+		touch-action: none;
 	}
 
 	.scroll-container[data-ctrl] {
@@ -109,6 +113,7 @@ const CosmozDocumentViewer = (host: Host) => {
 	const [pages, setPages] = useState<(string | (() => Promise<string>))[]>([]);
 	const scrollRef = useRef<HTMLElement>();
 	const pagesRef = useRef<VirtualizerHostElement>();
+	const pinchBusy = useRef(false);
 
 	// Refs kept in sync with state so ResizeObserver / event closures see
 	// current values without needing to re-register.
@@ -136,15 +141,33 @@ const CosmozDocumentViewer = (host: Host) => {
 
 	// ── hooks ────────────────────────────────────────────────────────────
 
-	const zoomAnchor = useZoomAnchor(
+	const emitZoom = (value: number, reason?: string) =>
+		host.dispatchEvent(
+			new CustomEvent('zoom-changed', {
+				detail: reason ? { value, reason } : { value },
+				bubbles: true,
+				composed: true,
+			}),
+		);
+
+	const zoomAnchor = useZoomAnchor({
 		scrollRef,
 		pagesRef,
 		zoom,
 		pageWidth,
 		containerWidth,
-	);
+		pinchBusy,
+	});
 	useCurrentPage(scrollRef, pagesRef, pages, setCurrentPage, currentPage);
 	useDragPan(scrollRef);
+	usePinchZoom({
+		scrollRef,
+		pagesRef,
+		naturalWidthRef,
+		emitZoom,
+		pinchBusy,
+		anchorRef: zoomAnchor.anchorRef,
+	});
 
 	// ── document change ──────────────────────────────────────────────────
 
@@ -225,17 +248,16 @@ const CosmozDocumentViewer = (host: Host) => {
 	// ── wheel zoom: announce the intent, nothing more ─────────────────────
 
 	const onWheel = (e: WheelEvent) => {
-		if (!e.ctrlKey) return;
+		if (!e.ctrlKey || pinchBusy.current) return;
 		e.preventDefault();
 		if (scrollRef.current) {
 			zoomAnchor.capture(scrollRef.current);
 		}
-		emit(
-			host,
-			'zoom-changed',
+		emitZoom(
 			roundToStep(
 				(zoomRef.current ?? 1) * (e.deltaY > 0 ? ZOOM_OUT_STEP : ZOOM_IN_STEP),
 			),
+			'wheel',
 		);
 	};
 
