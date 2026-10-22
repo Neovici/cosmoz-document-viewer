@@ -46,13 +46,13 @@ import '@neovici/cosmoz-document-viewer';
 
 ### Events
 
-| Event                  | `detail.value`            | Description                                                                                   |
-| ---------------------- | ------------------------- | --------------------------------------------------------------------------------------------- |
-| `zoom-changed`         | `number`, `detail.reason` | Cancelable intent from Ctrl+wheel (`reason: 'wheel'`) or fit follow (`reason: 'fit-follow'`). |
-| `fit-zoom-changed`     | `number`                  | The zoom factor that would fit the container's width.                                         |
-| `current-page-changed` | `number`                  | The current page changed while scrolling.                                                     |
-| `pages-changed`        | `number`                  | The page count changed (readout "N of M" support).                                            |
-| `page-ready`           | `{ naturalWidth }`        | (bubbled from a page) A page image finished loading.                                          |
+| Event                  | `detail.value`            | Description                                                                                                                                          |
+| ---------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `zoom-changed`         | `number`, `detail.reason` | Cancelable intent announcement: Ctrl+wheel (`reason: 'wheel'`), two-finger pinch release (`reason: 'pinch'`) or fit follow (`reason: 'fit-follow'`). |
+| `fit-zoom-changed`     | `number`                  | The zoom factor that would fit the container's width.                                                                                                |
+| `current-page-changed` | `number`                  | The current page changed while scrolling.                                                                                                            |
+| `pages-changed`        | `number`                  | The page count changed (readout "N of M" support).                                                                                                   |
+| `page-ready`           | `{ naturalWidth }`        | (bubbled from a page) A page image finished loading.                                                                                                 |
 
 ### Per-page overlays
 

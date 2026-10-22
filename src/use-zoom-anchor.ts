@@ -18,13 +18,23 @@ export interface ZoomAnchor {
  * on the virtualizer host for pages wider than the container), then restoring
  * the focal point once the new layout lands.
  */
-export const useZoomAnchor = (
-	scrollRef: { current: HTMLElement | undefined },
-	pagesRef: { current: VirtualizerHostElement | undefined },
-	zoom: number,
-	pageWidth: number,
-	containerWidth: number,
-) => {
+export interface ZoomAnchorConfig {
+	scrollRef: { current: HTMLElement | undefined };
+	pagesRef: { current: VirtualizerHostElement | undefined };
+	zoom: number;
+	pageWidth: number;
+	containerWidth: number;
+	pinchBusy?: { current?: boolean };
+}
+
+export const useZoomAnchor = ({
+	scrollRef,
+	pagesRef,
+	zoom,
+	pageWidth,
+	containerWidth,
+	pinchBusy,
+}: ZoomAnchorConfig) => {
 	const zoomRef = useRef(zoom);
 	zoomRef.current = zoom;
 
@@ -73,6 +83,10 @@ export const useZoomAnchor = (
 	useEffect(() => {
 		if (zoom == null || zoom === zoomPropRef.current) return;
 		zoomPropRef.current = zoom;
+		if (pinchBusy?.current) {
+			// The pinch commits its own baked scroll: don't double-apply.
+			return;
+		}
 
 		if (containerWidth === 0 || !pagesRef.current) return;
 		if (!zoomAnchorRef.current && scrollRef.current) {
@@ -106,5 +120,5 @@ export const useZoomAnchor = (
 		ro.observe(pagesRef.current);
 	}, [zoom, pageWidth, containerWidth]);
 
-	return { capture };
+	return { capture, anchorRef: zoomAnchorRef };
 };
