@@ -43,9 +43,21 @@ export const loadPdfPages = (url: string): Promise<LazyPage[]> => {
 			const canvas = document.createElement('canvas');
 			canvas.width = Math.floor(viewport.width);
 			canvas.height = Math.floor(viewport.height);
-			const context = canvas.getContext('2d');
-			await page.render({ canvasContext: context, viewport }).promise;
-			return canvas.toDataURL('image/jpeg', 0.85);
+			await page.render({ canvasContext: canvas.getContext('2d'), viewport })
+				.promise;
+			// The browser encodes on its own threads via toBlob and calls back
+			// on a task — toDataURL does the encode synchronously here, inside
+			// pdf.js's rAF continuation, and drops frames per page.
+			return new Promise((resolve, reject) => {
+				canvas.toBlob(
+					(blob) =>
+						blob
+							? resolve(URL.createObjectURL(blob))
+							: reject(new Error('JPEG encode failed')),
+					'image/jpeg',
+					0.85,
+				);
+			});
 		};
 
 		const ratios = await Promise.all(
