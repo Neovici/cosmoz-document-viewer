@@ -107,12 +107,14 @@ export const usePinchZoom = ({
 	scrollRef,
 	pagesRef,
 	naturalWidthRef,
+	pageWidthRef,
 	emitZoom,
 	pinchBusy,
 }: {
 	scrollRef: Ref<HTMLElement>;
 	pagesRef: Ref<HTMLElement>;
 	naturalWidthRef: Ref<number | undefined>;
+	pageWidthRef: Ref<number>;
 	emitZoom: (value: number, reason?: string) => void;
 	pinchBusy: { current?: boolean };
 }) => {
@@ -226,10 +228,7 @@ export const usePinchZoom = ({
 		 *  gesture-start presentation. */
 		const startPinch = () => {
 			const nat = naturalWidthRef.current ?? 0;
-			const pageEl = strip.querySelector<HTMLElement>(
-				'cosmoz-document-viewer-page',
-			);
-			const pageWidth0 = pageEl?.getBoundingClientRect().width ?? 0;
+			const pageWidth0 = pageWidthRef.current ?? 0;
 			if (!nat || !pageWidth0) {
 				return false;
 			}
@@ -254,13 +253,19 @@ export const usePinchZoom = ({
 			strip.style.transform = `translate(${gesture.tx}px, ${gesture.ty}px) scale(${gesture.k})`;
 		};
 
+		/** Content px under a viewport point in the gesture-start layout:
+		 *  screen = k·p + t − scroll0 inverted. */
+		const contentUnder = (mid: Point) => ({
+			x: (mid.x - gesture.tx + gesture.scroll0.x) / gesture.k,
+			y: (mid.y - gesture.ty + gesture.scroll0.y) / gesture.k,
+		});
+
 		// screen(y) = k·y + t − scroll0 holds after every per-move update.
 		const pinchMove = (midX: number, midY: number, scaleDiff: number) => {
-			const x = (midX - gesture.tx + gesture.scroll0.x) / gesture.k;
-			const y = (midY - gesture.ty + gesture.scroll0.y) / gesture.k;
+			const under = contentUnder({ x: midX, y: midY });
 			gesture.k = rubberBand(gesture.k * scaleDiff, gesture.minK, gesture.maxK);
-			gesture.tx = midX - gesture.k * x + gesture.scroll0.x;
-			gesture.ty = midY - gesture.k * y + gesture.scroll0.y;
+			gesture.tx = midX - gesture.k * under.x + gesture.scroll0.x;
+			gesture.ty = midY - gesture.k * under.y + gesture.scroll0.y;
 			applyTransform();
 			gesture.lastMid = { x: midX, y: midY };
 		};
@@ -280,10 +285,8 @@ export const usePinchZoom = ({
 				endGesture();
 				return;
 			}
+			const under = contentUnder(mid);
 			const s0 = gesture.scroll0;
-			// The content px (pre-gesture layout space) under the fingers.
-			let px = (mid.x - gesture.tx + s0.x) / gesture.k;
-			let py = (mid.y - gesture.ty + s0.y) / gesture.k;
 			const kC = Math.min(Math.max(gesture.k, gesture.minK), gesture.maxK);
 			let zoomTarget = roundToStep(gesture.zoom0 * kC);
 			// A sub-step pinch must not snap back to the start zoom: one
@@ -298,11 +301,9 @@ export const usePinchZoom = ({
 			const layoutK = zoomTarget / gesture.zoom0;
 			// The preview must match the committed scale exactly.
 			gesture.k = layoutK;
-			gesture.tx = mid.x - layoutK * px + s0.x;
-			gesture.ty = mid.y - layoutK * py + s0.y;
+			gesture.tx = mid.x - layoutK * under.x + gesture.scroll0.x;
+			gesture.ty = mid.y - layoutK * under.y + gesture.scroll0.y;
 			applyTransform();
-			px = (mid.x - gesture.tx + s0.x) / gesture.k;
-			py = (mid.y - gesture.ty + s0.y) / gesture.k;
 
 			// Unsuppress then announce: the bake below owns the scroll, in
 			// closed form, for both axes — the strip layout is exactly uniform
@@ -340,6 +341,14 @@ export const usePinchZoom = ({
 				el.setPointerCapture(pointerId);
 			} catch {
 				// synthetic pointers cannot be captured
+			}
+		};
+
+		const release = (pointerId: number) => {
+			try {
+				el.releasePointerCapture(pointerId);
+			} catch {
+				// pointer capture was never set
 			}
 		};
 
@@ -451,11 +460,7 @@ export const usePinchZoom = ({
 		};
 
 		const up = (e: PointerEvent) => {
-			try {
-				el.releasePointerCapture(e.pointerId);
-			} catch {
-				// pointer capture was never set
-			}
+			release(e.pointerId);
 			pointers.delete(e.pointerId);
 			if (pending?.id === e.pointerId) {
 				discardPending(); // tap or long-press: let the click through

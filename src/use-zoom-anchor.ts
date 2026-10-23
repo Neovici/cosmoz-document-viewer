@@ -17,11 +17,10 @@ export interface ZoomAnchorConfig {
 	/** Position as of the last scroll event. Zoom renders apply it here
 	 *  because the DOM read is already clamped to the new layout. */
 	scroll: { x: number; y: number };
-	zoom: number;
-	pageWidth: number;
+	zoom: number | undefined;
 	containerWidth: number;
 	/** The zoom that fits the container (the un-owned presentation's zoom). */
-	fitZoom: number;
+	fitZoom: number | undefined;
 	pinchBusy?: { current?: boolean };
 }
 
@@ -49,8 +48,8 @@ export const useZoomAnchor = ({
 	const capture = (
 		el: HTMLElement,
 		/** The zoom the captured content coords are in — the currently
-		 *  *laid-out* one. Defaults to the prop's current render value. */
-		oldZoom: number = zoomRef.current ?? 1,
+		 *  *laid-out* one. Un-owned layouts present at fitZoom. */
+		oldZoom: number = zoomRef.current ?? fitZoom ?? 1,
 		/** Pre-layout scroll position. Defaults to a live read — pass the
 		 *  mirrored one in zoom renders, where the DOM is already clamped. */
 		scroll: { x: number; y: number } = { x: el.scrollLeft, y: el.scrollTop },

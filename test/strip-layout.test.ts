@@ -6,9 +6,6 @@ describe('strip layout', () => {
 		const layout = stripLayout([1, 2, 1], 100);
 		expect(layout.positions).toEqual([0, 100, 300]);
 		expect(layout.totalHeight).toBe(400);
-		expect(layout.height(0)).toBe(100);
-		expect(layout.height(1)).toBe(200);
-		expect(layout.height(2)).toBe(100);
 	});
 
 	it('defaults unknown ratios to A4', () => {

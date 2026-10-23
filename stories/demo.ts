@@ -311,7 +311,8 @@ const Demo = (host: Host) => {
 					setFitZoom(e.detail?.value ?? 0)}
 				@current-page-changed=${(e: CustomEvent) =>
 					setCurrentPage(e.detail?.value)}
-				@pages-changed=${(e: CustomEvent) => setPageCount(e.detail?.value ?? 0)}
+				@page-count-changed=${(e: CustomEvent) =>
+					setPageCount(e.detail?.value ?? 0)}
 			>
 				${(host.annotate ? stamps : []).map(
 					(st) => html`

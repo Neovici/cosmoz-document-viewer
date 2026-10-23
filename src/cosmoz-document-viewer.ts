@@ -33,12 +33,6 @@ export interface LazyPage {
 
 export type PageInput = string | LazyPage | (() => Promise<string>);
 
-interface PageSpec {
-	url?: string;
-	render?: () => Promise<string>;
-	ratio?: number;
-}
-
 interface Props {
 	/** The document's pages. */
 	pages?: PageInput[];
@@ -52,12 +46,11 @@ export type CosmozDocumentViewerElement = HTMLElement & Props;
 
 type Host = CosmozDocumentViewerElement;
 
-const emit = <T>(host: EventTarget, name: string, value: T) =>
-	host.dispatchEvent(
-		new CustomEvent(name, { detail: { value }, bubbles: true, composed: true }),
-	);
+/** A page's upfront ratio: LazyPage may carry one; anything else defaults. */
+const ratioOf = (p: PageInput): number =>
+	typeof p === 'object' ? (p.ratio ?? DEFAULT_RATIO) : DEFAULT_RATIO;
 
-const emptySpecs: readonly PageSpec[] = [];
+const emptySpecs: readonly PageInput[] = [];
 
 const OVERSCAN = 1200; // strip px rendered beyond the viewport, both sides
 
@@ -123,7 +116,8 @@ const CosmozDocumentViewer = (host: Host) => {
 		() => 0,
 	);
 	const [, setReady] = useProperty<boolean>('ready', () => false);
-	const [specs, setSpecs] = useState<readonly PageSpec[]>(emptySpecs);
+	const [fitZoom, setFitZoom] = useProperty<number>('fitZoom', () => 0);
+	const [, setPageCount] = useProperty<number>('pageCount', () => 0);
 	const [ratios, setRatios] = useState<number[]>([]);
 	const [range, setRange] = useState({ from: 0, lastInclusive: -1 });
 	// Last scroll-event position. The zoom anchor captures from this mirror,
@@ -133,12 +127,8 @@ const CosmozDocumentViewer = (host: Host) => {
 	const scrollRef = useRef<HTMLElement>();
 	const pagesRef = useRef<HTMLElement>();
 	const pinchBusy = useRef(false);
-
-	// Refs kept in sync with state so event closures see current values.
-	const zoomRef = useRef<number>(1.0);
-	zoomRef.current = host.zoom ?? 1.0;
 	const lastPublishedRef = useRef(0);
-	const naturalWidthRef = useRef<number | undefined>(DEFAULT_NATURAL_WIDTH);
+	const naturalWidthRef = useRef<number>(DEFAULT_NATURAL_WIDTH);
 	naturalWidthRef.current = naturalWidth;
 
 	// Read reactively (render-tracking) so a post-mount zoomMode change
@@ -148,16 +138,15 @@ const CosmozDocumentViewer = (host: Host) => {
 
 	// ── derived ──────────────────────────────────────────────────────────
 
-	const zoom = host.zoom ?? 1.0;
-	const fitZoom =
-		containerWidth > 0 ? Math.min(1, containerWidth / naturalWidth) : 1.0;
 	// Until the view owns zoom, pages display fitted to the container.
 	let pageWidth = naturalWidth;
 	if (host.zoom != null) {
-		pageWidth = naturalWidth * zoom;
+		pageWidth = naturalWidth * host.zoom;
 	} else if (containerWidth > 0) {
 		pageWidth = Math.min(naturalWidth, containerWidth);
 	}
+	const pageWidthRef = useRef(0);
+	pageWidthRef.current = pageWidth;
 	const layout = useMemo(
 		() => stripLayout(ratios, pageWidth),
 		[ratios, pageWidth],
@@ -177,8 +166,7 @@ const CosmozDocumentViewer = (host: Host) => {
 	const zoomAnchor = useZoomAnchor({
 		scrollRef,
 		scroll: scrollPos,
-		zoom,
-		pageWidth,
+		zoom: host.zoom,
 		containerWidth,
 		pinchBusy,
 		fitZoom,
@@ -188,47 +176,30 @@ const CosmozDocumentViewer = (host: Host) => {
 		scrollRef,
 		pagesRef,
 		naturalWidthRef,
+		pageWidthRef,
 		emitZoom,
 		pinchBusy,
 	});
 
 	// ── document change ──────────────────────────────────────────────────
 
+	// One effect owns the whole document lifecycle: ratio seeds from the
+	// input, natural-width and ready reset, page count reported.
 	useEffect(() => {
-		setSpecs(
-			source.map((p) => {
-				if (typeof p === 'string') {
-					return { url: p };
-				}
-				if (typeof p === 'function') {
-					return { render: p };
-				}
-				return { render: p.render, ratio: p.ratio };
-			}),
-		);
-	}, [source]);
-
-	useEffect(() => {
-		setRatios(specs.map((s) => s.ratio ?? DEFAULT_RATIO));
+		setRatios(source.map(ratioOf));
 		setNaturalWidth(DEFAULT_NATURAL_WIDTH);
 		setReady(false);
-	}, [specs]);
+		setPageCount(source.length);
+	}, [source]);
 
-	// ── change events ────────────────────────────────────────────────────
-
+	// Fit zoom: derived from the container, reported to consumers. When the
+	// view follows (fit mode) the value is lifted into zoom ownership.
 	useEffect(() => {
-		emit(host, 'fit-zoom-changed', fitZoom);
-	}, [fitZoom]);
-
-	// Page count for the strip's "N of M" readout.
-	useEffect(() => {
-		emit(host, 'pages-changed', specs.length);
-	}, [specs.length]);
-
-	// In fit mode the zoom factor follows the container — reported, not owned.
-	useEffect(() => {
+		const fit =
+			containerWidth > 0 ? Math.min(1, containerWidth / naturalWidth) : 1.0;
+		setFitZoom(fit);
 		if (containerWidth === 0 || zoomMode !== 'fit') return;
-		emitZoom(fitZoom, 'fit-follow');
+		emitZoom(fit, 'fit-follow');
 	}, [containerWidth, naturalWidth, zoomMode]);
 
 	// ── container width ──────────────────────────────────────────────────
@@ -254,13 +225,12 @@ const CosmozDocumentViewer = (host: Host) => {
 		const el = scrollRef.current;
 		if (!el) return;
 		const update = () => {
-			setScrollPos({ x: el.scrollLeft, y: el.scrollTop });
-			const top = el.scrollTop - OVERSCAN;
-			const bottom = el.scrollTop + el.clientHeight + OVERSCAN;
-			setRange(layout.range(top, bottom));
+			const { scrollLeft: x, scrollTop: y, clientHeight: h } = el;
+			setScrollPos({ x, y });
+			setRange(layout.range(y - OVERSCAN, y + h + OVERSCAN));
 			// The page at the container's vertical midpoint is the current
 			// one; the layout is exact, so this publishes deterministically.
-			const page = layout.pageAt(el.scrollTop + el.clientHeight / 2);
+			const page = layout.pageAt(y + h / 2);
 			if (page !== lastPublishedRef.current) {
 				lastPublishedRef.current = page;
 				setCurrentPage(page);
@@ -274,12 +244,12 @@ const CosmozDocumentViewer = (host: Host) => {
 	// External currentPage writes (view-driven navigation): the layout is
 	// exact, so one closed-form assignment lands the jump.
 	useEffect(() => {
-		if (!specs.length || currentPage == null) return;
+		if (!source.length || currentPage == null) return;
 		if (currentPage === lastPublishedRef.current) return;
 		lastPublishedRef.current = currentPage;
 		const el = scrollRef.current;
 		if (el) el.scrollTop = layout.positions[currentPage] ?? 0;
-	}, [currentPage, specs.length]);
+	}, [currentPage, source.length]);
 
 	// ── page-ready: ratio, base width + ready flag ───────────────────────
 
@@ -314,8 +284,6 @@ const CosmozDocumentViewer = (host: Host) => {
 		return () => el.removeEventListener('page-ready', onPageReady);
 	}, []);
 
-	// ── remeasure when the strip's width changes ... (removed; layout is state)
-
 	// ── wheel zoom: announce the intent, nothing more ─────────────────────
 
 	const onWheel = (e: WheelEvent) => {
@@ -326,16 +294,18 @@ const CosmozDocumentViewer = (host: Host) => {
 		}
 		emitZoom(
 			roundToStep(
-				(zoomRef.current ?? 1) * (e.deltaY > 0 ? ZOOM_OUT_STEP : ZOOM_IN_STEP),
+				(host.zoom ?? fitZoom ?? 1) *
+					(e.deltaY > 0 ? ZOOM_OUT_STEP : ZOOM_IN_STEP),
 			),
 			'wheel',
 		);
 	};
 
 	const renderPage = (i: number) => {
-		const spec = specs[i];
+		const p = source[i];
+		const page = typeof p === 'object' ? p.render : p;
 		return html`<cosmoz-document-viewer-page
-			.page=${spec?.url ?? spec?.render ?? ''}
+			.page=${page ?? ''}
 			.width=${pageWidth ?? 0}
 			.index=${i}
 		>

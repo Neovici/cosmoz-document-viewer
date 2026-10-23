@@ -40,25 +40,15 @@ export const stripLayout = (ratios: number[], pageWidth: number) => {
 		}
 		return lo;
 	};
-	/** First page intersecting [y0, y1] (strip px). */
-	const firstIndexIn = (y0: number) => {
-		if (y0 <= 0) {
-			return 0;
-		}
-		return pageAt(y0);
-	};
 	return {
 		positions,
 		totalHeight,
 		pageAt,
 		/** Page range intersecting [y0, y1]; [from, to) semantics via lastInclusive. */
 		range: (y0: number, y1: number) => ({
-			from: firstIndexIn(Math.max(y0, 0)),
+			from: pageAt(Math.max(y0, 0)),
 			lastInclusive: Math.min(pageAt(Math.max(y1, 0)), ratios.length - 1),
 		}),
-		height: (i: number) =>
-			(i + 1 < positions.length ? positions[i + 1] : totalHeight) -
-			positions[i],
 	};
 };
 
