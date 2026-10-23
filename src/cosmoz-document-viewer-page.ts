@@ -53,6 +53,9 @@ interface Props {
 	 *  memoized on the renderer itself. */
 	page?: string | (() => Promise<string>);
 	width?: number;
+	/** Strip position, echoed in `page-ready` so the viewer maps a load's
+	 *  ratio onto the right page. */
+	index?: number;
 }
 
 /** A rendered page element inside the viewer's virtualized strip. */
@@ -125,7 +128,10 @@ const CosmozDocumentViewerPage = (host: Host) => {
 		if (nw > 0) {
 			host.dispatchEvent(
 				new CustomEvent('page-ready', {
-					detail: { naturalWidth: Math.min(nw, DEFAULT_NATURAL_WIDTH) },
+					detail: {
+						index: host.index,
+						naturalWidth: Math.min(nw, DEFAULT_NATURAL_WIDTH),
+					},
 					bubbles: true,
 					composed: true,
 				}),
