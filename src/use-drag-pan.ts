@@ -5,10 +5,17 @@ import { useEffect } from '@pionjs/pion';
 // drag. Read per event, so tests can spoof the platform.
 const isMac = () => /mac/iu.test(navigator.platform);
 
-export const useDragPan = (scrollRef: { current: HTMLElement | undefined }) => {
+export const useDragPan = ({
+	scrollRef,
+	enabled,
+}: {
+	scrollRef: { current: HTMLElement | undefined };
+	/** Suspends the pan entirely when false (annotation draw owns the pointer). */
+	enabled: boolean;
+}) => {
 	useEffect(() => {
 		const el = scrollRef.current;
-		if (!el) return;
+		if (!el || !enabled) return;
 
 		const panKey = () => (isMac() ? 'Meta' : 'Control');
 
@@ -82,5 +89,5 @@ export const useDragPan = (scrollRef: { current: HTMLElement | undefined }) => {
 			window.removeEventListener('keydown', onKeyDown);
 			window.removeEventListener('keyup', onKeyUp);
 		};
-	}, []);
+	}, [enabled]);
 };

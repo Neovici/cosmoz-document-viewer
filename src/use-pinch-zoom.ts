@@ -110,6 +110,7 @@ export const usePinchZoom = ({
 	pageWidthRef,
 	emitZoom,
 	pinchBusy,
+	enabled,
 }: {
 	scrollRef: Ref<HTMLElement>;
 	pagesRef: Ref<HTMLElement>;
@@ -117,11 +118,13 @@ export const usePinchZoom = ({
 	pageWidthRef: Ref<number>;
 	emitZoom: (value: number, reason?: string) => void;
 	pinchBusy: { current?: boolean };
+	/** Suspends gestures entirely when false (annotation draw owns the pointer). */
+	enabled: boolean;
 }) => {
 	useEffect(() => {
 		const el = scrollRef.current;
 		const strip = pagesRef.current;
-		if (!el || !strip) {
+		if (!el || !strip || !enabled) {
 			return;
 		}
 
@@ -494,5 +497,5 @@ export const usePinchZoom = ({
 			el.removeEventListener('pointercancel', up);
 			el.removeEventListener('wheel', onWheel);
 		};
-	}, []);
+	}, [enabled]);
 };
