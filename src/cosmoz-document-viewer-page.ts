@@ -60,15 +60,32 @@ export type CosmozDocumentViewerPageElement = HTMLElement & Props;
 
 type Host = HTMLElement & Props;
 
+interface RenderEntry {
+	promise: Promise<string>;
+	state: 'pending' | 'done' | 'error';
+	value?: string;
+}
+
 /** Lazy-renderer results, memoized per renderer identity: a page element
- *  that re-mounts (virtualizer window changes) reuses the result instead of
- *  re-invoking the renderer. */
-const pageResults = new WeakMap<() => Promise<string>, Promise<string>>();
+ *  that re-mounts (page leaves the rendered window) reuses the result instead
+ *  of re-invoking the renderer. Done results are readable synchronously, so a
+ *  re-mounted instance boots straight to its image. */
+const pageResults = new WeakMap<() => Promise<string>, RenderEntry>();
+
+const bootFromCache = (input: string | (() => Promise<string>) | undefined) => {
+	const entry =
+		typeof input === 'function' ? pageResults.get(input) : undefined;
+	return entry?.state === 'done' ? entry.value : undefined;
+};
 
 const CosmozDocumentViewerPage = (host: Host) => {
 	const [naturalRatio, setNaturalRatio] = useState(0);
 	const [loadedUrl, setLoadedUrl] = useState<string>();
-	const [resolvedUrl, setResolvedUrl] = useState<string>();
+	// Boot synchronously from a done memo: no placeholder frame for pages
+	// that already rendered once.
+	const [resolvedUrl, setResolvedUrl] = useState<string | undefined>(() =>
+		bootFromCache(host.page),
+	);
 
 	const width = host.width ?? 0;
 	const displayHeight = naturalRatio ? naturalRatio * width : width * A4_RATIO;
@@ -78,14 +95,23 @@ const CosmozDocumentViewerPage = (host: Host) => {
 
 	useEffect(() => {
 		if (typeof input !== 'function') return;
+		let entry = pageResults.get(input);
+		if (!entry) {
+			entry = { promise: Promise.resolve(input()), state: 'pending' };
+			pageResults.set(input, entry);
+		}
 		let live = true;
-		const pending = pageResults.get(input) ?? Promise.resolve(input());
-		pageResults.set(input, pending);
-		pending.then(
-			(resolved) => live && setResolvedUrl(resolved),
+		entry.promise.then(
+			(resolved) => {
+				entry.state = 'done';
+				entry.value = resolved;
+				if (live) {
+					setResolvedUrl(resolved);
+				}
+			},
 			// Renderer errors keep the slot's placeholder.
 			() => {
-				/* placeholder stays */
+				entry!.state = 'error';
 			},
 		);
 		return () => {

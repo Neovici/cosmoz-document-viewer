@@ -1,37 +1,41 @@
-import type { VirtualizerHostElement } from '@lit-labs/virtualizer/virtualize.js';
 import { useEffect, useRef } from '@pionjs/pion';
 
-/** The scroll focal point: the page containing it, its offset in that page,
- *  and the offset within the viewport — enough to restore the focal point
- *  after a zoom changes page sizes. */
+/** The scroll focal point in content px (pre-zoom layout space) plus its
+ *  offsets within the viewport: enough to restore the focal point after a
+ *  zoom, because the strip's proportional layout scales exactly with the
+ *  page width (positions are prefix sums × the new width). */
 export interface ZoomAnchor {
-	pageIndex: number;
-	offsetInPageY: number;
+	yContent: number;
+	xContent: number;
 	offsetInViewY: number;
+	offsetInViewX: number;
 	oldZoom: number;
 }
 
-/**
- * Owns the scroll anchor used for manual zooming: captures the focal point
- * on container resizes (from wheel zooms and pointer grabs), and applies
- * externally set zoom factors to the page strip — re-measuring (data-min-width
- * on the virtualizer host for pages wider than the container), then restoring
- * the focal point once the new layout lands.
- */
 export interface ZoomAnchorConfig {
 	scrollRef: { current: HTMLElement | undefined };
-	pagesRef: { current: VirtualizerHostElement | undefined };
+	/** Position as of the last scroll event. Zoom renders apply it here
+	 *  because the DOM read is already clamped to the new layout. */
+	scroll: { x: number; y: number };
 	zoom: number;
 	pageWidth: number;
 	containerWidth: number;
+	/** The zoom that fits the container (the un-owned presentation's zoom). */
+	fitZoom: number;
 	pinchBusy?: { current?: boolean };
 }
 
+/**
+ * Owns the scroll anchor used for zooming the strip: Ctrl+wheel captures
+ * inline, view-driven zoom echoes capture at effect time from the mirrored
+ * scroll position, and zoom changes scale the content anchor directly — no
+ * measurement, no observers, exact by construction.
+ */
 export const useZoomAnchor = ({
 	scrollRef,
-	pagesRef,
+	scroll,
 	zoom,
-	pageWidth,
+	fitZoom,
 	containerWidth,
 	pinchBusy,
 }: ZoomAnchorConfig) => {
@@ -42,83 +46,48 @@ export const useZoomAnchor = ({
 	// The last zoom prop the hook applied (see the effect below).
 	const zoomPropRef = useRef<number | null>(null);
 
-	const capture = (el: HTMLElement) => {
-		const rect = el.getBoundingClientRect();
-		const offsetY = el.clientHeight / 2;
-		const focalClientY = rect.top + offsetY;
-		const pageEls = el.querySelectorAll<HTMLElement>('[data-page]');
-		let pageIndex = 0;
-		let offsetInPageY = 0;
-		for (const pageEl of pageEls) {
-			const pageRect = pageEl.getBoundingClientRect();
-			if (pageRect.top <= focalClientY) {
-				pageIndex = Number(pageEl.dataset.page ?? 0);
-				offsetInPageY = focalClientY - pageRect.top;
-			} else {
-				break;
-			}
-		}
-
+	const capture = (
+		el: HTMLElement,
+		/** The zoom the captured content coords are in — the currently
+		 *  *laid-out* one. Defaults to the prop's current render value. */
+		oldZoom: number = zoomRef.current ?? 1,
+		/** Pre-layout scroll position. Defaults to a live read — pass the
+		 *  mirrored one in zoom renders, where the DOM is already clamped. */
+		scroll: { x: number; y: number } = { x: el.scrollLeft, y: el.scrollTop },
+	) => {
 		zoomAnchorRef.current = {
-			pageIndex,
-			offsetInPageY: offsetInPageY ?? 0,
-			offsetInViewY: offsetY,
-			oldZoom: zoomRef.current ?? 1,
+			yContent: scroll.y + el.clientHeight / 2,
+			xContent: scroll.x + el.clientWidth / 2,
+			offsetInViewY: el.clientHeight / 2,
+			offsetInViewX: el.clientWidth / 2,
+			oldZoom,
 		};
 	};
 
-	// Host width follows the pages whenever pages exceed the container —
-	// stateless in zoom, so even a bare viewer (zoom never set) is pannable.
-	useEffect(() => {
-		if (containerWidth === 0 || !pagesRef.current || pageWidth == null) return;
-		if (pageWidth > containerWidth) {
-			pagesRef.current.dataset.minWidth = `${pageWidth}px`;
-		} else {
-			delete pagesRef.current.dataset.minWidth;
-		}
-	}, [pageWidth, containerWidth]);
-
-	// Apply an externally set zoom with a scroll anchor: the pages must be
-	// re-measured and the focal point kept in place.
 	useEffect(() => {
 		if (zoom == null || zoom === zoomPropRef.current) return;
+		// The layout is the previous zoom's layout until the restore below;
+		// capture before updating the applied-zoom cursor.
+		const previousZoom = zoomPropRef.current ?? fitZoom ?? zoom;
 		zoomPropRef.current = zoom;
 		if (pinchBusy?.current) {
-			// The pinch commits its own baked scroll: don't double-apply.
+			// The pinch's bake owns this echo; its closed form is exact.
 			return;
 		}
+		if (containerWidth === 0) return;
 
-		if (containerWidth === 0 || !pagesRef.current) return;
 		if (!zoomAnchorRef.current && scrollRef.current) {
-			capture(scrollRef.current);
+			capture(scrollRef.current, previousZoom, scroll);
 		}
 		const anchor = zoomAnchorRef.current;
 		zoomAnchorRef.current = null;
+		const el = scrollRef.current;
+		if (!anchor || !el) return;
 
-		if (!anchor || !scrollRef.current) return;
 		const ratio = zoom / anchor.oldZoom;
-		const container = scrollRef.current;
-		const ro = new ResizeObserver(() => {
-			ro.disconnect();
-			const pageEl = container.querySelector<HTMLElement>(
-				`[data-page="${anchor.pageIndex}"]`,
-			);
-			if (pageEl) {
-				const containerRect = container.getBoundingClientRect();
-				const pageTop =
-					pageEl.getBoundingClientRect().top -
-					containerRect.top +
-					container.scrollTop;
-				container.scrollTop =
-					pageTop + anchor.offsetInPageY * ratio - anchor.offsetInViewY;
-			} else {
-				container.scrollTop =
-					(container.scrollTop + anchor.offsetInViewY) * ratio -
-					anchor.offsetInViewY;
-			}
-		});
-		ro.observe(pagesRef.current);
-	}, [zoom, pageWidth, containerWidth]);
+		el.scrollTop = anchor.yContent * ratio - anchor.offsetInViewY;
+		el.scrollLeft = anchor.xContent * ratio - anchor.offsetInViewX;
+	}, [zoom, containerWidth]);
 
 	return { capture, anchorRef: zoomAnchorRef };
 };

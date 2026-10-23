@@ -14,7 +14,7 @@ import {
 } from '@pionjs/pion';
 import { ref } from 'lit-html/directives/ref.js';
 import { roundToStep, ZOOM_IN_STEP, ZOOM_OUT_STEP } from '../src/zoom-model';
-import { loadPdfPageThunks } from './pdf';
+import { loadPdfPages } from './pdf';
 
 const styles = css`
 	:host {
@@ -214,7 +214,7 @@ const Demo = (host: Host) => {
 		if (!host.url) return;
 		let cancelled = false;
 		setThunks(null);
-		loadPdfPageThunks(host.url).then(
+		loadPdfPages(host.url).then(
 			(t) => {
 				if (!cancelled) setThunks(t);
 			},

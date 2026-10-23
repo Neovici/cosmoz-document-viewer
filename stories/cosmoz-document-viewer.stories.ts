@@ -3,12 +3,12 @@ import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import { expect } from 'storybook/test';
 import '../src/index';
 import './demo';
-import { loadPdfPageThunks } from './pdf';
+import { loadPdfPages } from './pdf';
 
 const PDF_URL = 'assets/alices-adventures-in-wonderland.pdf';
 
 // Shared, memoized: one document fetch + worker session for all stories.
-const pdfThunks = await loadPdfPageThunks(PDF_URL);
+const pdfPages = await loadPdfPages(PDF_URL);
 
 /** Plain deadline-poll. Storybook's waitFor has surprising semantics
  *  (callback throws fail fast; timeouts resolve undefined). */
@@ -104,7 +104,7 @@ export const Showcase: Story = {
 
 export const Default: Story = {
 	render: () =>
-		html`<cosmoz-document-viewer .pages=${pdfThunks}></cosmoz-document-viewer>`,
+		html`<cosmoz-document-viewer .pages=${pdfPages}></cosmoz-document-viewer>`,
 	play: async ({ canvasElement }) => {
 		await until(() => getViewer(canvasElement)?.ready === true);
 		await until(
@@ -119,7 +119,7 @@ export const Default: Story = {
 export const CurrentPageTracking: Story = {
 	name: 'Page jump + tracking',
 	render: () =>
-		html`<cosmoz-document-viewer .pages=${pdfThunks}></cosmoz-document-viewer>`,
+		html`<cosmoz-document-viewer .pages=${pdfPages}></cosmoz-document-viewer>`,
 	play: async ({ canvasElement, step }) => {
 		await until(() => getViewer(canvasElement)?.ready === true);
 		const viewer = getViewer(canvasElement);
@@ -134,19 +134,16 @@ export const CurrentPageTracking: Story = {
 
 export const Zoom: Story = {
 	render: () =>
-		html`<cosmoz-document-viewer .pages=${pdfThunks}></cosmoz-document-viewer>`,
+		html`<cosmoz-document-viewer .pages=${pdfPages}></cosmoz-document-viewer>`,
 	play: async ({ canvasElement, step }) => {
 		await until(() => getViewer(canvasElement)?.ready === true);
 		const viewer = getViewer(canvasElement);
 		await step('Setting zoom widens pages past the viewport', async () => {
 			viewer.zoom = 1.5;
-			await until(
-				() =>
-					viewer.shadowRoot
-						.querySelector('.pages')
-						?.dataset?.minWidth?.includes('px') === true,
-				10_000,
-			);
+			await until(() => {
+				const sc = viewer.shadowRoot.querySelector('.scroll-container');
+				return sc.scrollWidth > sc.clientWidth;
+			}, 10_000);
 		});
 	},
 };
@@ -243,6 +240,9 @@ export const PinchZoom: Story = {
 			await until(() => sc.scrollWidth > sc.clientWidth, 5_000);
 			// The transient transform was dropped after the bake.
 			await until(() => ['', 'none'].includes(strip.style.transform), 5_000);
+			// Real fingers never arrive inside a gesture's bake window; pace
+			// steps apart so each gesture starts with an idle strip.
+			await new Promise((done) => setTimeout(done, 700));
 		});
 
 		await step('Fingers together shrink back to the fit floor', async () => {
@@ -258,9 +258,8 @@ export const PinchZoom: Story = {
 			gesture(2, 'pointerup', cx + 8, cy);
 			gesture(1, 'pointerup', cx - 8, cy);
 			await until(() => (viewer.zoom ?? 1) <= fitted - 0.03, 5_000);
-			// The commit's bake lands within a frame or two; a fast
-			// follow-up gesture must not be eaten by the dying one.
 			await until(() => ['', 'none'].includes(strip.style.transform), 5_000);
+			await new Promise((done) => setTimeout(done, 700));
 		});
 
 		await step('One-finger flick pans the strip with inertia', async () => {
