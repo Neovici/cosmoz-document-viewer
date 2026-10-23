@@ -125,26 +125,24 @@ const CosmozDocumentViewerPage = (host: Host) => {
 	const onLoad = (e: Event) => {
 		const img = e.target as HTMLImageElement;
 		const nw = img.naturalWidth;
-		if (nw > 0) {
-			host.dispatchEvent(
-				new CustomEvent('page-ready', {
-					detail: {
-						index: host.index,
-						naturalWidth: Math.min(nw, DEFAULT_NATURAL_WIDTH),
-					},
-					bubbles: true,
-					composed: true,
-				}),
-			);
-		}
-		setNaturalRatio(img.naturalHeight / nw);
+		if (nw === 0) return;
+		const ratio = img.naturalHeight / nw;
+		host.dispatchEvent(
+			new CustomEvent('page-ready', {
+				detail: {
+					index: host.index,
+					ratio,
+					naturalWidth: Math.min(nw, DEFAULT_NATURAL_WIDTH),
+				},
+				bubbles: true,
+				composed: true,
+			}),
+		);
+		setNaturalRatio(ratio);
 		setLoadedUrl(img.getAttribute('src') ?? undefined);
 	};
 
 	return html`
-		<style>
-			${styles}
-		</style>
 		<div
 			class="page-container"
 			style="width: ${width}px; height: ${displayHeight}px;"
