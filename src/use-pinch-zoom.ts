@@ -14,7 +14,7 @@
  * - The transform is transient. Release announces the rounded zoom (the
  *   view echoes it back through `zoom-changed`) and injects the gesture's
  *   focal anchor into useZoomAnchor, which maps it onto the relaid layout
- *   from the real page top — the virtualizer's relayout is *not* a uniform
+ *   from the real page top — the strip relayout is *not* a uniform
  *   scale (cached/estimated item sizes mix), so committing a closed-form
  *   scroll position here would jump on deep pages.
  * - Only the x axis is baked in closed form (strip width = page width is
@@ -28,8 +28,7 @@
  */
 
 import { useEffect } from '@pionjs/pion';
-import type { ZoomAnchor } from './use-zoom-anchor';
-import { roundToStep } from './zoom-model';
+import { roundToStep } from './zoom-model.js';
 
 type Ref<T> = { current: T | undefined };
 
@@ -108,16 +107,16 @@ export const usePinchZoom = ({
 	scrollRef,
 	pagesRef,
 	naturalWidthRef,
+	pageWidthRef,
 	emitZoom,
 	pinchBusy,
-	anchorRef,
 }: {
 	scrollRef: Ref<HTMLElement>;
 	pagesRef: Ref<HTMLElement>;
 	naturalWidthRef: Ref<number | undefined>;
+	pageWidthRef: Ref<number>;
 	emitZoom: (value: number, reason?: string) => void;
 	pinchBusy: { current?: boolean };
-	anchorRef: { current?: ZoomAnchor | null };
 }) => {
 	useEffect(() => {
 		const el = scrollRef.current;
@@ -185,12 +184,12 @@ export const usePinchZoom = ({
 		};
 
 		const fling = (pointerType: string) => {
+			const first = samples[0];
+			const last = samples[samples.length - 1];
+			const dt = last ? last.t - first.t : 0;
 			if (samples.length < 2 || pointerType === 'mouse') {
 				return;
 			}
-			const first = samples[0];
-			const last = samples[samples.length - 1];
-			const dt = last.t - first.t;
 			if (dt < 30) {
 				return;
 			}
@@ -229,10 +228,7 @@ export const usePinchZoom = ({
 		 *  gesture-start presentation. */
 		const startPinch = () => {
 			const nat = naturalWidthRef.current ?? 0;
-			const pageEl = strip.querySelector<HTMLElement>(
-				'cosmoz-document-viewer-page',
-			);
-			const pageWidth0 = pageEl?.getBoundingClientRect().width ?? 0;
+			const pageWidth0 = pageWidthRef.current ?? 0;
 			if (!nat || !pageWidth0) {
 				return false;
 			}
@@ -257,13 +253,19 @@ export const usePinchZoom = ({
 			strip.style.transform = `translate(${gesture.tx}px, ${gesture.ty}px) scale(${gesture.k})`;
 		};
 
+		/** Content px under a viewport point in the gesture-start layout:
+		 *  screen = k·p + t − scroll0 inverted. */
+		const contentUnder = (mid: Point) => ({
+			x: (mid.x - gesture.tx + gesture.scroll0.x) / gesture.k,
+			y: (mid.y - gesture.ty + gesture.scroll0.y) / gesture.k,
+		});
+
 		// screen(y) = k·y + t − scroll0 holds after every per-move update.
 		const pinchMove = (midX: number, midY: number, scaleDiff: number) => {
-			const x = (midX - gesture.tx + gesture.scroll0.x) / gesture.k;
-			const y = (midY - gesture.ty + gesture.scroll0.y) / gesture.k;
+			const under = contentUnder({ x: midX, y: midY });
 			gesture.k = rubberBand(gesture.k * scaleDiff, gesture.minK, gesture.maxK);
-			gesture.tx = midX - gesture.k * x + gesture.scroll0.x;
-			gesture.ty = midY - gesture.k * y + gesture.scroll0.y;
+			gesture.tx = midX - gesture.k * under.x + gesture.scroll0.x;
+			gesture.ty = midY - gesture.k * under.y + gesture.scroll0.y;
 			applyTransform();
 			gesture.lastMid = { x: midX, y: midY };
 		};
@@ -283,11 +285,8 @@ export const usePinchZoom = ({
 				endGesture();
 				return;
 			}
-			const containerRect = el.getBoundingClientRect();
+			const under = contentUnder(mid);
 			const s0 = gesture.scroll0;
-			// The content px (pre-gesture layout space) under the fingers.
-			let px = (mid.x - gesture.tx + s0.x) / gesture.k;
-			let py = (mid.y - gesture.ty + s0.y) / gesture.k;
 			const kC = Math.min(Math.max(gesture.k, gesture.minK), gesture.maxK);
 			let zoomTarget = roundToStep(gesture.zoom0 * kC);
 			// A sub-step pinch must not snap back to the start zoom: one
@@ -302,68 +301,33 @@ export const usePinchZoom = ({
 			const layoutK = zoomTarget / gesture.zoom0;
 			// The preview must match the committed scale exactly.
 			gesture.k = layoutK;
-			gesture.tx = mid.x - layoutK * px + s0.x;
-			gesture.ty = mid.y - layoutK * py + s0.y;
+			gesture.tx = mid.x - layoutK * under.x + gesture.scroll0.x;
+			gesture.ty = mid.y - layoutK * under.y + gesture.scroll0.y;
 			applyTransform();
-			px = (mid.x - gesture.tx + s0.x) / gesture.k;
-			py = (mid.y - gesture.ty + s0.y) / gesture.k;
 
-			// Focal anchor: the page holding py, and the offset inside it —
-			// both in pre-gesture layout px, inverted from the transformed
-			// rects (still on screen, so this is exact).
-			const wrappers = [...strip.querySelectorAll<HTMLElement>('[data-page]')];
-			let anchor: ZoomAnchor | null = null;
-			if (wrappers.length) {
-				let pageIndex = Number(wrappers[0].dataset.page);
-				let pageTop = null;
-				for (const wrapper of wrappers) {
-					const top =
-						(wrapper.getBoundingClientRect().top -
-							containerRect.top -
-							gesture.ty +
-							s0.y) /
-						gesture.k;
-					const index = Number(wrapper.dataset.page);
-					if (top <= py) {
-						pageIndex = index;
-						pageTop = top;
-					}
-				}
-				if (pageTop === null) {
-					// py above the strip's start: pin the first page's top.
-					const first = wrappers[0];
-					pageIndex = Number(first.dataset.page);
-					pageTop =
-						(first.getBoundingClientRect().top -
-							containerRect.top -
-							gesture.ty +
-							s0.y) /
-						gesture.k;
-				}
-				anchor = {
-					pageIndex,
-					offsetInPageY: py - pageTop,
-					offsetInViewY: mid.y,
-					oldZoom: gesture.zoom0,
-				};
-			}
-
-			// Hand over: unsuppress useZoomAnchor, then announce. The anchor
-			// path restores y from the real relaid geometry; x is rigid
-			// (strip width = page width), so its closed form stays exact.
-			anchorRef.current = anchor;
+			// Unsuppress then announce: the bake below owns the scroll, in
+			// closed form, for both axes — the strip layout is exactly uniform
+			//(positions = prefix sums scaled by the new width).
 			pinchBusy.current = false;
 			emitZoom(zoomTarget, 'pinch');
 			let baked = false;
+			let armed = false;
+			// ResizeObserver delivers an initial record right after observe;
+			// only the next record means the echo's relayout actually landed.
 			const ro = new ResizeObserver(() => {
+				if (!armed) {
+					armed = true;
+					return;
+				}
 				baked = true;
 				el.scrollLeft = s0.x - gesture.tx;
+				el.scrollTop = s0.y - gesture.ty;
 				endGesture();
 			});
 			bakeObserver = ro;
 			ro.observe(strip);
-			// The consumer ignores the announcement: nothing to commit, drop
-			// the preview and return to the pre-gesture view.
+			// The consumer ignores the announcement: the layout is unchanged,
+			// revert to the pre-gesture view instead of baking stale scrolls.
 			window.setTimeout(() => {
 				if (baked) {
 					return;
@@ -377,6 +341,14 @@ export const usePinchZoom = ({
 				el.setPointerCapture(pointerId);
 			} catch {
 				// synthetic pointers cannot be captured
+			}
+		};
+
+		const release = (pointerId: number) => {
+			try {
+				el.releasePointerCapture(pointerId);
+			} catch {
+				// pointer capture was never set
 			}
 		};
 
@@ -488,11 +460,7 @@ export const usePinchZoom = ({
 		};
 
 		const up = (e: PointerEvent) => {
-			try {
-				el.releasePointerCapture(e.pointerId);
-			} catch {
-				// pointer capture was never set
-			}
+			release(e.pointerId);
 			pointers.delete(e.pointerId);
 			if (pending?.id === e.pointerId) {
 				discardPending(); // tap or long-press: let the click through

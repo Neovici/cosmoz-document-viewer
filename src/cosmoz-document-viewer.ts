@@ -1,33 +1,40 @@
-import { flow } from '@lit-labs/virtualizer/layouts/flow.js';
-import {
-	virtualize,
-	VirtualizerHostElement,
-	virtualizerRef,
-} from '@lit-labs/virtualizer/virtualize.js';
 import {
 	component,
 	css,
 	html,
 	useEffect,
+	useMemo,
 	useRef,
 	useState,
 } from '@pionjs/pion';
 import { useProperty } from '@pionjs/pion/lib/use-property';
 import { ref } from 'lit-html/directives/ref.js';
-import { DEFAULT_NATURAL_WIDTH } from './cosmoz-document-viewer-page';
-import { useCurrentPage } from './use-current-page';
-import { useDragPan } from './use-drag-pan';
-import { usePinchZoom } from './use-pinch-zoom';
-import { useZoomAnchor } from './use-zoom-anchor';
-import { roundToStep, ZOOM_IN_STEP, ZOOM_OUT_STEP } from './zoom-model';
+import { DEFAULT_NATURAL_WIDTH } from './cosmoz-document-viewer-page.js';
+import { DEFAULT_RATIO, stripLayout } from './strip-layout.js';
+import { useDragPan } from './use-drag-pan.js';
+import { usePinchZoom } from './use-pinch-zoom.js';
+import { useZoomAnchor } from './use-zoom-anchor.js';
+import { virtualWindow } from './virtual-window.js';
+import { roundToStep, ZOOM_IN_STEP, ZOOM_OUT_STEP } from './zoom-model.js';
 
 type ZoomMode = 'fit' | 'manual';
 
-/** A page is either a ready URL (image) or a lazy renderer returning one. */
-type PageInput = string | (() => Promise<string>);
+/** A page is a ready URL, or a lazy renderer that resolves to one. The
+ *  renderer form may carry the page's aspect ratio upfront (PDF loaders
+ *  know it before rasterizing), which keeps the layout fully stable on
+ *  mount. */
+export interface LazyPage {
+	/** Invoked when the page first enters the viewport; the result is
+	 *  memoized on this object. */
+	render: () => Promise<string>;
+	/** Height/width ratio of the rendered page. */
+	ratio?: number;
+}
+
+export type PageInput = string | LazyPage | (() => Promise<string>);
 
 interface Props {
-	/** The document's pages: image URLs or thunks that resolve to one. */
+	/** The document's pages. */
 	pages?: PageInput[];
 	/** Zoom factor; owned by the embedding view (two-way via `zoom-changed`). */
 	zoom?: number;
@@ -39,12 +46,13 @@ export type CosmozDocumentViewerElement = HTMLElement & Props;
 
 type Host = CosmozDocumentViewerElement;
 
-const emit = <T>(host: EventTarget, name: string, value: T) =>
-	host.dispatchEvent(
-		new CustomEvent(name, { detail: { value }, bubbles: true, composed: true }),
-	);
+/** A page's upfront ratio: LazyPage may carry one; anything else defaults. */
+const ratioOf = (p: PageInput): number =>
+	typeof p === 'object' ? (p.ratio ?? DEFAULT_RATIO) : DEFAULT_RATIO;
 
-const emptyPages: PageInput[] = [];
+const emptySpecs: readonly PageInput[] = [];
+
+const OVERSCAN = 1200; // strip px rendered beyond the viewport, both sides
 
 const styles = css`
 	:host {
@@ -77,30 +85,28 @@ const styles = css`
 	}
 
 	.pages {
-		display: flex;
-		flex-direction: column;
-		padding: 0;
+		position: relative;
+		width: 100%;
 		min-height: 100%;
 	}
 
 	.page-wrapper {
-		/* Sizing note: fit zoom makes a page exactly the container's width. For
-		 * widths past fit this wrapper grows to the page instead of clipping it
-		 * invisibly (width: 100% would keep the overflow out of the scroll
-		 * container's reach — the touch pan user-visible bug). */
-		min-width: 100%;
-		width: max-content;
+		position: absolute;
+		left: 0;
+		right: 0;
 		display: flex;
 		justify-content: center;
 	}
 `;
 
 /**
- * Continuously vertically scrolling document viewer (lit-virtualizer).
- * Page rendering, scroll anchoring and pan live here; zoom and the
- * page choice are owned by the embedding view and passed as properties —
- * every internal flip (Ctrl+wheel) is announced with a cancelable
- * `*-changed` event so the view can lift it into its state.
+ * Continuously vertically scrolling document viewer built on a proportional
+ * strip layout (`strip-layout`): all pages share one width and positions
+ * are prefix sums of per-page aspect ratios, so zooming is exact and
+ * anchored restore is closed-form. Page rendering, scroll tracking and pan
+ * live here; zoom and the current page are owned by the embedding view and
+ * passed as properties — every internal flip (Ctrl+wheel, pinch) is
+ * announced with a `zoom-changed` event so the view lifts it into its state.
  */
 const CosmozDocumentViewer = (host: Host) => {
 	const [naturalWidth, setNaturalWidth] = useState(DEFAULT_NATURAL_WIDTH);
@@ -110,36 +116,41 @@ const CosmozDocumentViewer = (host: Host) => {
 		() => 0,
 	);
 	const [, setReady] = useProperty<boolean>('ready', () => false);
-	const [pages, setPages] = useState<(string | (() => Promise<string>))[]>([]);
+	const [fitZoom, setFitZoom] = useProperty<number>('fitZoom', () => 0);
+	const [, setPageCount] = useProperty<number>('pageCount', () => 0);
+	const [ratios, setRatios] = useState<number[]>([]);
+	const [range, setRange] = useState({ from: 0, lastInclusive: -1 });
+	// Last scroll-event position. The zoom anchor captures from this mirror,
+	// because a DOM read at zoom-render time is already clamped to the new
+	// (smaller) layout.
+	const [scrollPos, setScrollPos] = useState({ x: 0, y: 0 });
 	const scrollRef = useRef<HTMLElement>();
-	const pagesRef = useRef<VirtualizerHostElement>();
+	const pagesRef = useRef<HTMLElement>();
 	const pinchBusy = useRef(false);
-
-	// Refs kept in sync with state so ResizeObserver / event closures see
-	// current values without needing to re-register.
-	const naturalWidthRef = useRef(DEFAULT_NATURAL_WIDTH);
+	const lastPublishedRef = useRef(0);
+	const naturalWidthRef = useRef<number>(DEFAULT_NATURAL_WIDTH);
 	naturalWidthRef.current = naturalWidth;
-	const zoomRef = useRef<number>(1.0);
-	zoomRef.current = host.zoom ?? 1.0;
 
-	// Read reactively (render-tracking) so a post-mount zoomMode change works;
-	// host properties are not attribute-mapped (no zoom-mode="" attribute).
+	// Read reactively (render-tracking) so a post-mount zoomMode change
+	// works; host properties are not attribute-mapped.
 	const zoomMode = host.zoomMode as ZoomMode | undefined;
-	const source = host.pages ?? emptyPages;
+	const source = host.pages ?? emptySpecs;
 
 	// ── derived ──────────────────────────────────────────────────────────
 
-	const zoom = host.zoom ?? 1.0;
-	const fitZoom = containerWidth > 0 ? containerWidth / naturalWidth : 1.0;
 	// Until the view owns zoom, pages display fitted to the container.
 	let pageWidth = naturalWidth;
 	if (host.zoom != null) {
-		pageWidth = naturalWidth * zoom;
+		pageWidth = naturalWidth * host.zoom;
 	} else if (containerWidth > 0) {
 		pageWidth = Math.min(naturalWidth, containerWidth);
 	}
-
-	// ── hooks ────────────────────────────────────────────────────────────
+	const pageWidthRef = useRef(0);
+	pageWidthRef.current = pageWidth;
+	const layout = useMemo(
+		() => stripLayout(ratios, pageWidth),
+		[ratios, pageWidth],
+	);
 
 	const emitZoom = (value: number, reason?: string) =>
 		host.dispatchEvent(
@@ -150,57 +161,45 @@ const CosmozDocumentViewer = (host: Host) => {
 			}),
 		);
 
+	// ── hooks ────────────────────────────────────────────────────────────
+
 	const zoomAnchor = useZoomAnchor({
 		scrollRef,
-		pagesRef,
-		zoom,
-		pageWidth,
+		scroll: scrollPos,
+		zoom: host.zoom,
 		containerWidth,
 		pinchBusy,
+		fitZoom,
 	});
-	useCurrentPage(scrollRef, pagesRef, pages, setCurrentPage, currentPage);
 	useDragPan(scrollRef);
 	usePinchZoom({
 		scrollRef,
 		pagesRef,
 		naturalWidthRef,
+		pageWidthRef,
 		emitZoom,
 		pinchBusy,
-		anchorRef: zoomAnchor.anchorRef,
 	});
 
 	// ── document change ──────────────────────────────────────────────────
 
+	// One effect owns the whole document lifecycle: ratio seeds from the
+	// input, natural-width and ready reset, page count reported.
 	useEffect(() => {
-		setPages(source);
-	}, [source]);
-
-	useEffect(() => {
+		setRatios(source.map(ratioOf));
 		setNaturalWidth(DEFAULT_NATURAL_WIDTH);
 		setReady(false);
+		setPageCount(source.length);
 	}, [source]);
 
-	// ── change events ────────────────────────────────────────────────────
-
+	// Fit zoom: derived from the container, reported to consumers. When the
+	// view follows (fit mode) the value is lifted into zoom ownership.
 	useEffect(() => {
-		emit(host, 'fit-zoom-changed', fitZoom);
-	}, [fitZoom]);
-
-	// Page count for the strip's "N of M" readout.
-	useEffect(() => {
-		emit(host, 'pages-changed', pages.length);
-	}, [pages.length]);
-
-	// In fit mode the zoom factor follows the container — reported, not owned.
-	useEffect(() => {
+		const fit =
+			containerWidth > 0 ? Math.min(1, containerWidth / naturalWidth) : 1.0;
+		setFitZoom(fit);
 		if (containerWidth === 0 || zoomMode !== 'fit') return;
-		host.dispatchEvent(
-			new CustomEvent('zoom-changed', {
-				detail: { value: fitZoom, reason: 'fit-follow' },
-				bubbles: true,
-				composed: true,
-			}),
-		);
+		emitZoom(fit, 'fit-follow');
 	}, [containerWidth, naturalWidth, zoomMode]);
 
 	// ── container width ──────────────────────────────────────────────────
@@ -210,9 +209,9 @@ const CosmozDocumentViewer = (host: Host) => {
 		if (!el) return;
 		const ro = new ResizeObserver((entries) => {
 			for (const entry of entries) {
-				// Capture the scroll anchor before the container width changes so
-				// manual-mode zooms keep the focal point steady.
-				zoomAnchor.capture(el);
+				// A zoom following this resize (fit-follow adoption) captures
+				// its own fresh anchor in useZoomAnchor; pre-capturing here
+				// would survive plain scrolls and restore from a stale spot.
 				setContainerWidth(entry.contentRect.width);
 			}
 		});
@@ -220,30 +219,70 @@ const CosmozDocumentViewer = (host: Host) => {
 		return () => ro.disconnect();
 	}, []);
 
-	// ── page-ready: base width + ready flag ──────────────────────────────
+	// ── virtual window + page tracking ───────────────────────────────────
+
+	useEffect(() => {
+		const el = scrollRef.current;
+		if (!el) return;
+		const update = () => {
+			const { scrollLeft: x, scrollTop: y, clientHeight: h } = el;
+			setScrollPos({ x, y });
+			setRange(layout.range(y - OVERSCAN, y + h + OVERSCAN));
+			// The page at the container's vertical midpoint is the current
+			// one; the layout is exact, so this publishes deterministically.
+			const page = layout.pageAt(y + h / 2);
+			if (page !== lastPublishedRef.current) {
+				lastPublishedRef.current = page;
+				setCurrentPage(page);
+			}
+		};
+		update();
+		el.addEventListener('scroll', update);
+		return () => el.removeEventListener('scroll', update);
+	}, [layout]);
+
+	// External currentPage writes (view-driven navigation): the layout is
+	// exact, so one closed-form assignment lands the jump.
+	useEffect(() => {
+		if (!source.length || currentPage == null) return;
+		if (currentPage === lastPublishedRef.current) return;
+		lastPublishedRef.current = currentPage;
+		const el = scrollRef.current;
+		if (el) el.scrollTop = layout.positions[currentPage] ?? 0;
+	}, [currentPage, source.length]);
+
+	// ── page-ready: ratio, base width + ready flag ───────────────────────
 
 	useEffect(() => {
 		const el = scrollRef.current;
 		if (!el) return;
 		const onPageReady = (e: Event) => {
-			const detail = (e as CustomEvent<{ naturalWidth: number }>).detail;
-			if (naturalWidthRef.current === DEFAULT_NATURAL_WIDTH) {
-				setNaturalWidth(detail.naturalWidth);
+			const {
+				index,
+				ratio,
+				naturalWidth: nw,
+			} = (
+				e as CustomEvent<{ index: number; ratio: number; naturalWidth: number }>
+			).detail;
+			if (
+				naturalWidthRef.current === DEFAULT_NATURAL_WIDTH &&
+				typeof nw === 'number' &&
+				nw > 0
+			) {
+				setNaturalWidth(nw);
+			}
+			if (typeof ratio === 'number' && ratio > 0) {
+				setRatios((prev) => {
+					const next = [...prev];
+					next[index] = ratio;
+					return next;
+				});
 			}
 			setReady(true);
 		};
 		el.addEventListener('page-ready', onPageReady);
 		return () => el.removeEventListener('page-ready', onPageReady);
 	}, []);
-
-	// ── remeasure when the natural width lands (page base size) ───────────
-
-	useEffect(() => {
-		// Optional on virtualizer versions without invalidateAndRemeasure
-		// (patched in this repo until lit/lit#5417 releases): without it,
-		// ResizeObserver reflows still cover rendered pages.
-		pagesRef.current?.[virtualizerRef]?.invalidateAndRemeasure?.();
-	}, [naturalWidth]);
 
 	// ── wheel zoom: announce the intent, nothing more ─────────────────────
 
@@ -255,18 +294,24 @@ const CosmozDocumentViewer = (host: Host) => {
 		}
 		emitZoom(
 			roundToStep(
-				(zoomRef.current ?? 1) * (e.deltaY > 0 ? ZOOM_OUT_STEP : ZOOM_IN_STEP),
+				(host.zoom ?? fitZoom ?? 1) *
+					(e.deltaY > 0 ? ZOOM_OUT_STEP : ZOOM_IN_STEP),
 			),
 			'wheel',
 		);
 	};
 
-	const renderPage = (page: string | (() => Promise<string>), index: number) =>
-		html`<div class="page-wrapper" data-page="${index}">
-			<cosmoz-document-viewer-page .page=${page} .width=${pageWidth ?? 0}>
-				<slot name="page-${index}-overlay"></slot>
-			</cosmoz-document-viewer-page>
-		</div>`;
+	const renderPage = (i: number) => {
+		const p = source[i];
+		const page = typeof p === 'object' ? p.render : p;
+		return html`<cosmoz-document-viewer-page
+			.page=${page ?? ''}
+			.width=${pageWidth ?? 0}
+			.index=${i}
+		>
+			<slot name="page-${i}-overlay"></slot>
+		</cosmoz-document-viewer-page>`;
+	};
 
 	return html`
 		<div
@@ -278,16 +323,12 @@ const CosmozDocumentViewer = (host: Host) => {
 		>
 			<div
 				class="pages"
+				style="min-height: ${layout.totalHeight}px; min-width: ${pageWidth}px"
 				${ref((el) => {
-					pagesRef.current = el as VirtualizerHostElement;
+					pagesRef.current = el as HTMLElement;
 				})}
 			>
-				${virtualize({
-					items: pages,
-					keyFunction: (_, i) => String(i),
-					renderItem: (item, index) => renderPage(item, index),
-					layout: flow({ estimatedItemHeight: 1200 }),
-				})}
+				${virtualWindow({ layout, range, renderItem: renderPage })}
 			</div>
 		</div>
 	`;
@@ -300,4 +341,4 @@ const cosmozDocumentViewer = component(CosmozDocumentViewer, {
 customElements.define('cosmoz-document-viewer', cosmozDocumentViewer);
 
 export { CosmozDocumentViewer, cosmozDocumentViewer };
-export type { PageInput, ZoomMode };
+export type { ZoomMode };

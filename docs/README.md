@@ -1,12 +1,15 @@
 # cosmoz-document-viewer
 
-Continuously scrolling, zoomable, multi-page document viewer, built on
-[`@lit-labs/virtualizer`](https://github.com/lit/lit/tree/main/packages/labs/virtualizer).
+Continuously scrolling, zoomable, multi-page document viewer.
 
-Pages render as a vertical strip (laid out by the virtualizer's `flow`
-layout). The component owns rendering, scroll anchoring and pan; zoom and
-the current page are owned by the embedding view (the component announces
-its intent with events, the view owns the state).
+Layout is bespoke and proportional rather than a generic virtualizer: all
+pages share one width, page height is aspect-ratio × width, and positions
+are prefix sums of the ratio array. Zooming is therefore exact and closed
+form — the anchored restore is arithmetic, not measurement, and panning or
+pinching stays stable at any scroll depth. The component owns rendering,
+scroll anchoring and pan; zoom and the current page are owned by the
+embedding view (the component announces its intent with events, the view
+owns the state).
 
 ## Usage
 
@@ -36,23 +39,26 @@ import '@neovici/cosmoz-document-viewer';
 
 ### Properties
 
-| Property      | Type                                           | Description                                                                                                                                                                                                                                                                                                      |
-| ------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pages`       | `Array<string \| (() => Promise<string>)>`     | The document's pages: ready image URLs or lazy renderers that resolve to one (e.g. PDF pages rasterized on demand). A renderer runs when its page first enters the viewport (the virtualizer's window plus overscan); the result is memoized on the renderer, so remounts reuse it. Pages appear as they render. |
-| `zoom`        | `number` (owned by the view)                   | Zoom factor owned by the view. Until the view sets it, pages display fitted to the container width; `@zoom-changed` announcements (Ctrl+wheel or `fit` follow) are applied back through this property. Zoom `1` = the page's natural raster width.                                                               |
-| `zoomMode`    | `'fit' \| 'manual'`                            | How the zoom factor was chosen. `fit` width-follows the container: any container resize reports `@zoom-changed` with `reason: 'fit-follow'`.                                                                                                                                                                     |
-| `currentPage` | `number` (read and write; announced on change) | The page at (or above) the viewport's vertical midpoint. Writing it jumps to that page.                                                                                                                                                                                                                          |
-| `ready`       | `boolean` (readonly)                           | `true` once the first page has loaded and laid out.                                                                                                                                                                                                                                                              |
+| Property      | Type                                           | Description                                                                                                                                                                                                                                                                                                                                                             |
+| ------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pages`       | `Array<string \| { render, ratio? }>`          | The document's pages: a ready image URL, or a lazy page `{ render: () => Promise<string>, ratio?: number }`. A `render` runs when its page first enters the viewport; the result is memoized on the object. When `ratio` is provided (PDF loaders can know it upfront), the layout is exact and stable from mount; otherwise the ratio is measured when the page loads. |
+| `zoom`        | `number` (owned by the view)                   | Zoom factor owned by the view. Until the view sets it, pages display fitted to the container width; `@zoom-changed` announcements (Ctrl+wheel or `fit` follow) are applied back through this property. Zoom `1` = the page's natural raster width.                                                                                                                      |
+| `zoomMode`    | `'fit' \| 'manual'`                            | How the zoom factor was chosen. `fit` width-follows the container: any container resize reports `@zoom-changed` with `reason: 'fit-follow'`.                                                                                                                                                                                                                            |
+| `currentPage` | `number` (read and write; announced on change) | The page at (or above) the viewport's vertical midpoint. Writing it jumps to that page.                                                                                                                                                                                                                                                                                 |
+| `fitZoom`     | `number` (readonly)                            | The zoom factor that fits the container's width, capped at `1` — the unscaled fit never upscales past the rasters.                                                                                                                                                                                                                                                      |
+| `pageCount`   | `number` (readonly)                            | The rendered document's page count.                                                                                                                                                                                                                                                                                                                                     |
+| `ready`       | `boolean` (readonly)                           | `true` once the first page has loaded and laid out.                                                                                                                                                                                                                                                                                                                     |
 
 ### Events
 
-| Event                  | `detail.value`            | Description                                                                                                                                          |
-| ---------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `zoom-changed`         | `number`, `detail.reason` | Cancelable intent announcement: Ctrl+wheel (`reason: 'wheel'`), two-finger pinch release (`reason: 'pinch'`) or fit follow (`reason: 'fit-follow'`). |
-| `fit-zoom-changed`     | `number`                  | The zoom factor that would fit the container's width.                                                                                                |
-| `current-page-changed` | `number`                  | The current page changed while scrolling.                                                                                                            |
-| `pages-changed`        | `number`                  | The page count changed (readout "N of M" support).                                                                                                   |
-| `page-ready`           | `{ naturalWidth }`        | (bubbled from a page) A page image finished loading.                                                                                                 |
+| Event                  | `detail.value`                       | Description                                                                                                                                          |
+| ---------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `zoom-changed`         | `number`, `detail.reason`            | Cancelable intent announcement: Ctrl+wheel (`reason: 'wheel'`), two-finger pinch release (`reason: 'pinch'`) or fit follow (`reason: 'fit-follow'`). |
+| `fit-zoom-changed`     | `number`, `detail.path: 'fitZoom'`   | The fit zoom changed (`useProperty` announcement; cancelable — `lift()` it or ignore).                                                               |
+| `page-count-changed`   | `number`, `detail.path: 'pageCount'` | The page count changed (new document).                                                                                                               |
+| `current-page-changed` | `number`                             | The current page changed while scrolling.                                                                                                            |
+| `pages-changed`        | `number`                             | The page count changed (readout "N of M" support).                                                                                                   |
+| `page-ready`           | `{ index, ratio, naturalWidth }`     | (bubbled from a page) A page image finished loading and reported its aspect ratio; also sets the viewer's `ready` once the first page lays out.      |
 
 ### Per-page overlays
 

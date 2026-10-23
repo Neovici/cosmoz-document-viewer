@@ -53,6 +53,9 @@ interface Props {
 	 *  memoized on the renderer itself. */
 	page?: string | (() => Promise<string>);
 	width?: number;
+	/** Strip position, echoed in `page-ready` so the viewer maps a load's
+	 *  ratio onto the right page. */
+	index?: number;
 }
 
 /** A rendered page element inside the viewer's virtualized strip. */
@@ -60,15 +63,32 @@ export type CosmozDocumentViewerPageElement = HTMLElement & Props;
 
 type Host = HTMLElement & Props;
 
+interface RenderEntry {
+	promise: Promise<string>;
+	state: 'pending' | 'done' | 'error';
+	value?: string;
+}
+
 /** Lazy-renderer results, memoized per renderer identity: a page element
- *  that re-mounts (virtualizer window changes) reuses the result instead of
- *  re-invoking the renderer. */
-const pageResults = new WeakMap<() => Promise<string>, Promise<string>>();
+ *  that re-mounts (page leaves the rendered window) reuses the result instead
+ *  of re-invoking the renderer. Done results are readable synchronously, so a
+ *  re-mounted instance boots straight to its image. */
+const pageResults = new WeakMap<() => Promise<string>, RenderEntry>();
+
+const bootFromCache = (input: string | (() => Promise<string>) | undefined) => {
+	const entry =
+		typeof input === 'function' ? pageResults.get(input) : undefined;
+	return entry?.state === 'done' ? entry.value : undefined;
+};
 
 const CosmozDocumentViewerPage = (host: Host) => {
 	const [naturalRatio, setNaturalRatio] = useState(0);
 	const [loadedUrl, setLoadedUrl] = useState<string>();
-	const [resolvedUrl, setResolvedUrl] = useState<string>();
+	// Boot synchronously from a done memo: no placeholder frame for pages
+	// that already rendered once.
+	const [resolvedUrl, setResolvedUrl] = useState<string | undefined>(() =>
+		bootFromCache(host.page),
+	);
 
 	const width = host.width ?? 0;
 	const displayHeight = naturalRatio ? naturalRatio * width : width * A4_RATIO;
@@ -78,14 +98,23 @@ const CosmozDocumentViewerPage = (host: Host) => {
 
 	useEffect(() => {
 		if (typeof input !== 'function') return;
+		let entry = pageResults.get(input);
+		if (!entry) {
+			entry = { promise: Promise.resolve(input()), state: 'pending' };
+			pageResults.set(input, entry);
+		}
 		let live = true;
-		const pending = pageResults.get(input) ?? Promise.resolve(input());
-		pageResults.set(input, pending);
-		pending.then(
-			(resolved) => live && setResolvedUrl(resolved),
+		entry.promise.then(
+			(resolved) => {
+				entry.state = 'done';
+				entry.value = resolved;
+				if (live) {
+					setResolvedUrl(resolved);
+				}
+			},
 			// Renderer errors keep the slot's placeholder.
 			() => {
-				/* placeholder stays */
+				entry!.state = 'error';
 			},
 		);
 		return () => {
@@ -96,23 +125,24 @@ const CosmozDocumentViewerPage = (host: Host) => {
 	const onLoad = (e: Event) => {
 		const img = e.target as HTMLImageElement;
 		const nw = img.naturalWidth;
-		if (nw > 0) {
-			host.dispatchEvent(
-				new CustomEvent('page-ready', {
-					detail: { naturalWidth: Math.min(nw, DEFAULT_NATURAL_WIDTH) },
-					bubbles: true,
-					composed: true,
-				}),
-			);
-		}
-		setNaturalRatio(img.naturalHeight / nw);
+		if (nw === 0) return;
+		const ratio = img.naturalHeight / nw;
+		host.dispatchEvent(
+			new CustomEvent('page-ready', {
+				detail: {
+					index: host.index,
+					ratio,
+					naturalWidth: Math.min(nw, DEFAULT_NATURAL_WIDTH),
+				},
+				bubbles: true,
+				composed: true,
+			}),
+		);
+		setNaturalRatio(ratio);
 		setLoadedUrl(img.getAttribute('src') ?? undefined);
 	};
 
 	return html`
-		<style>
-			${styles}
-		</style>
 		<div
 			class="page-container"
 			style="width: ${width}px; height: ${displayHeight}px;"
