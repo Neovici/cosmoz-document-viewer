@@ -22,9 +22,9 @@
  * - `pinchBusy` covers the whole ownership window: the viewer skips wheel
  *   zoom and useZoomAnchor skips mid-gesture zoom echoes. A consumer that
  *   ignores the announcement reverts to the pre-gesture view instead.
- * - `touch-action: none` comes with the hook (viewer CSS): touch pan is
- *   JS-driven (fling decay restores inertia), so native scrolling never
- *   races the two-finger takeover.
+ * - `touch-action: none` comes with the hook (viewer CSS) and applies while
+ *   gestures are owned (`touch='gestures'/'off'`); `'native'` flips it back
+ *   to `auto` so the browser scrolls and no hook binds.
  */
 
 import { useEffect } from '@pionjs/pion';

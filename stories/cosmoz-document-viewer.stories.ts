@@ -78,17 +78,55 @@ export const Showcase: Story = {
 		) as HTMLSlotElement;
 		expect(namedSlot.assignedElements().length).toBe(0);
 
+		await step('Touch mode defaults to native scrolling', async () => {
+			const v = getDemoViewer(canvasElement);
+			expect(v?.touch).toBe('native');
+			expect(
+				getComputedStyle(v!.shadowRoot.querySelector('.scroll-container')!)
+					.touchAction,
+			).toBe('auto');
+		});
+
+		await step('Touch toggle flips native ↔ gesture scrolling', async () => {
+			const toggle = () =>
+				getDemoEl(canvasElement)?.shadowRoot?.querySelector(
+					'cosmoz-button[data-touch-toggle]',
+				);
+			const sc = () =>
+				getDemoViewer(canvasElement)?.shadowRoot?.querySelector(
+					'.scroll-container',
+				);
+			toggle()?.dispatchEvent(
+				new MouseEvent('click', { bubbles: true, composed: true }),
+			);
+			await until(
+				() => getDemoViewer(canvasElement)?.touch === 'gestures',
+				5_000,
+				'(touch=gestures)',
+			);
+			expect(getComputedStyle(sc()!).touchAction).toBe('none');
+			toggle()?.dispatchEvent(
+				new MouseEvent('click', { bubbles: true, composed: true }),
+			);
+			await until(
+				() => getDemoViewer(canvasElement)?.touch === 'native',
+				5_000,
+				'(touch=native)',
+			);
+			expect(getComputedStyle(sc()!).touchAction).toBe('auto');
+		});
+
 		await step('Marker button arms highlight draw mode', async () => {
 			const marker = getDemoEl(canvasElement)?.shadowRoot?.querySelector(
-				'cosmoz-button[aria-pressed]',
+				'cosmoz-button[label="Toggle highlight mode"]',
 			);
 			marker?.dispatchEvent(
 				new MouseEvent('click', { bubbles: true, composed: true }),
 			);
 			await until(
-				() => getDemoViewer(canvasElement)?.gestures === false,
+				() => getDemoViewer(canvasElement)?.touch === 'off',
 				5_000,
-				'(marker toggle arms gestures=false)',
+				'(marker arms touch=off)',
 			);
 		});
 
@@ -227,7 +265,15 @@ export const PinchZoom: Story = {
 	play: async ({ canvasElement, step }) => {
 		await until(() => getViewer(canvasElement)?.ready === true);
 		const viewer = getViewer(canvasElement);
+		// Default touch ownership is native; arm the JS gesture model the
+		// steps below drive. The touch-action flip = the rebind is live.
+		viewer.touch = 'gestures';
 		const sc = viewer.shadowRoot.querySelector('.scroll-container');
+		await until(
+			() => getComputedStyle(sc).touchAction === 'none',
+			5_000,
+			'(gesture hooks armed)',
+		);
 		const strip = viewer.shadowRoot.querySelector('.pages') as HTMLElement;
 		const rect = sc.getBoundingClientRect();
 		const cx = rect.left + rect.width / 2;
