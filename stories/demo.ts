@@ -27,7 +27,6 @@ const SCROLL_SVG = html`<svg
 	height="16"
 	viewBox="0 0 24 24"
 	fill="currentColor"
-	slot="icon"
 >
 	<path d="M6 10 12 4l6 6H6zm0 4 6 6 6-6H6z" />
 </svg>`;
@@ -37,7 +36,6 @@ const MARKER_SVG = html`<svg
 	height="16"
 	viewBox="0 0 24 24"
 	fill="currentColor"
-	slot="icon"
 >
 	<path
 		d="M15.8 3.2a2.5 2.5 0 0 1 3.5 0l1.5 1.5a2.5 2.5 0 0 1 0 3.5L11.2 17.8l-5.5 1.1 1.1-5.5 9-10.2z"
@@ -83,6 +81,7 @@ const styles = css`
 		z-index: 2;
 	}
 	.titlebar .title {
+		min-width: 0;
 		overflow: hidden;
 		white-space: nowrap;
 		text-overflow: ellipsis;
@@ -108,6 +107,37 @@ const styles = css`
 		opacity: 0.4;
 		cursor: default;
 	}
+	/* Annotations live in their own piece of chrome — the highlighter's
+	 * home, grown with content: marker entry always, nav and Clear once
+	 * highlights exist. Thumb-reached at the bottom on phones. */
+	.annotation-bar {
+		position: absolute;
+		bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+		left: 50%;
+		transform: translateX(-50%);
+		width: max-content;
+		max-width: calc(100% - 24px);
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		padding: 6px 14px;
+		border-radius: 999px;
+		background: rgba(20, 20, 20, 0.72);
+		backdrop-filter: blur(8px);
+		box-shadow: 0 2px 12px rgba(0, 0, 0, 0.28);
+		z-index: 2;
+	}
+	.annotation-bar[data-armed] {
+		box-shadow:
+			0 2px 12px rgba(0, 0, 0, 0.28),
+			0 0 0 2px var(--cz-color-bg-highlight, #3b82f6);
+	}
+	.highlight-indicator {
+		color: #fff;
+		font-family: system-ui, sans-serif;
+		font-size: 13px;
+		white-space: nowrap;
+	}
 	.zoom-pct {
 		min-width: 44px;
 		text-align: center;
@@ -126,6 +156,20 @@ const styles = css`
 		}
 		.zoom-pct {
 			min-width: 36px;
+		}
+		.annotation-bar {
+			bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+			gap: 14px;
+			padding: 8px 16px;
+		}
+	}
+	.titlebar .title {
+		min-width: 0;
+	}
+	/* On touch, the resize handle is chrome from another era. */
+	@media (pointer: coarse) {
+		.resize-handle {
+			display: none;
 		}
 	}
 	@media (max-width: 400px) {
@@ -481,6 +525,22 @@ const Demo = (host: Host) => {
 						setTouchMode(touchMode === 'gestures' ? 'native' : 'gestures')}
 					>${SCROLL_SVG}</cosmoz-button
 				>
+				<button @click=${() => zoomStep(ZOOM_OUT_STEP)}>−</button>
+				<span class="zoom-pct">${fmtPercent(zoom || fitZoom)}</span>
+				<button @click=${() => zoomStep(ZOOM_IN_STEP)}>+</button>
+				<button @click=${() => setZoom(fitZoom)} ?disabled=${!fitZoom}>
+					Fit
+				</button>
+				<span class="page-indicator"
+					>${pageCount ? `${currentPage + 1} / ${pageCount}` : ''}</span
+				>
+			</div>
+			<div
+				class="resize-handle"
+				@pointerdown=${onHandleDown}
+				title="Drag to resize"
+			></div>
+			<div class="annotation-bar" ?data-armed=${highlightMode}>
 				<cosmoz-button
 					variant=${highlightMode ? 'primary' : 'tertiary'}
 					size="sm"
@@ -518,35 +578,19 @@ const Demo = (host: Host) => {
 							>
 								›
 							</cosmoz-button>
+							<cosmoz-button
+								variant="tertiary"
+								size="sm"
+								label="Clear highlights"
+								@click=${() => {
+									setHighlights([]);
+									setActiveId(null);
+								}}
+								>Clear</cosmoz-button
+							>
 						`
 					: ''}
-				<button @click=${() => zoomStep(ZOOM_OUT_STEP)}>−</button>
-				<span class="zoom-pct">${fmtPercent(zoom || fitZoom)}</span>
-				<button @click=${() => zoomStep(ZOOM_IN_STEP)}>+</button>
-				<button @click=${() => setZoom(fitZoom)} ?disabled=${!fitZoom}>
-					Fit
-				</button>
-				<span class="page-indicator"
-					>${pageCount ? `${currentPage + 1} / ${pageCount}` : ''}</span
-				>
-				${highlightMode && highlights.length
-					? html`<cosmoz-button
-							variant="tertiary"
-							size="sm"
-							label="Clear highlights"
-							@click=${() => {
-								setHighlights([]);
-								setActiveId(null);
-							}}
-							>Clear</cosmoz-button
-						>`
-					: ''}
 			</div>
-			<div
-				class="resize-handle"
-				@pointerdown=${onHandleDown}
-				title="Drag to resize"
-			></div>
 		</div>
 	`;
 };
