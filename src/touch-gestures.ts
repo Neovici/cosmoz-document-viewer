@@ -172,7 +172,10 @@ class TouchGestures extends AsyncDirective {
 		return this.el!.firstElementChild as HTMLElement;
 	}
 
-	render(): unknown {
+	/** The directive call's signature derives from this method's params,
+	 *  so the arg stays; only update() acts on it. */
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	render(_host: GestureHost): unknown {
 		return noChange;
 	}
 
