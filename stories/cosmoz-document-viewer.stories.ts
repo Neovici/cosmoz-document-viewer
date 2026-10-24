@@ -165,6 +165,23 @@ export const Showcase: Story = {
 			);
 			const [rect2] = namedSlot.assignedElements();
 			expect(rect2.getBoundingClientRect().height).toBeGreaterThan(0);
+
+			// The preview runs play() on load: leave the demo touchable —
+			// disarm the draw mode (keep the highlight; the bar still shows it).
+			// touch='off' freezes touch-action, and an armed crosshair on a
+			// fresh visit reads as a broken viewer.
+			getDemoEl(canvasElement)
+				?.shadowRoot?.querySelector(
+					'cosmoz-button[label="Toggle highlight mode"]',
+				)
+				?.dispatchEvent(
+					new MouseEvent('click', { bubbles: true, composed: true }),
+				);
+			await until(
+				() => getDemoViewer(canvasElement)?.touch === 'native',
+				5_000,
+				'(play leaves touch=native)',
+			);
 		});
 	},
 };
@@ -356,6 +373,50 @@ export const PinchZoom: Story = {
 			await new Promise((d) => setTimeout(d, 200));
 			const settled = sc.scrollTop;
 			await until(() => sc.scrollTop >= settled, 3_000);
+		});
+
+		await step('Ctrl+drag pans (mouse) without leaving gestures', async () => {
+			const before = { x: sc.scrollLeft, y: sc.scrollTop };
+			// The strip has horizontal overflow from the previous steps.
+			sc.dispatchEvent(
+				new PointerEvent('pointerdown', {
+					pointerId: 10,
+					pointerType: 'mouse',
+					ctrlKey: true,
+					button: 0,
+					clientX: cx,
+					clientY: cy,
+					bubbles: true,
+					composed: true,
+				}),
+			);
+			sc.dispatchEvent(
+				new PointerEvent('pointermove', {
+					pointerId: 10,
+					pointerType: 'mouse',
+					ctrlKey: true,
+					clientX: cx - 60,
+					clientY: cy,
+					bubbles: true,
+					composed: true,
+				}),
+			);
+			sc.dispatchEvent(
+				new PointerEvent('pointerup', {
+					pointerId: 10,
+					pointerType: 'mouse',
+					clientX: cx - 60,
+					clientY: cy,
+					bubbles: true,
+					composed: true,
+				}),
+			);
+			await until(
+				() => sc.scrollLeft !== before.x,
+				5_000,
+				'(ctrl+drag panned)',
+			);
+			expect(sc.getBoundingClientRect().width).toBeGreaterThan(0);
 		});
 	},
 };
