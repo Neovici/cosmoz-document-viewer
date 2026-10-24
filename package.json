@@ -1,19 +1,23 @@
 {
-  "name": "@neovici/cosmoz-component",
-  "version": "1.5.1",
-  "description": "Template for Neovici public web components",
+  "name": "@neovici/cosmoz-document-viewer",
+  "version": "0.1.0",
+  "description": "Continuously scrolling, zoomable multi-page document viewer built on lit-virtualizer",
   "keywords": [
     "web-components",
     "pion",
-    "lit-html"
+    "lit-html",
+    "virtualizer",
+    "document",
+    "viewer",
+    "zoom"
   ],
-  "homepage": "https://github.com/Neovici/cosmoz-component#readme",
+  "homepage": "https://github.com/Neovici/cosmoz-document-viewer#readme",
   "bugs": {
-    "url": "https://github.com/Neovici/cosmoz-component/issues"
+    "url": "https://github.com/Neovici/cosmoz-document-viewer/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Neovici/cosmoz-component.git"
+    "url": "git+https://github.com/Neovici/cosmoz-document-viewer.git"
   },
   "license": "Apache-2.0",
   "author": "Neovici Development",
@@ -33,7 +37,8 @@
     "storybook:build": "storybook build",
     "storybook:deploy": "storybook-to-ghpages",
     "storybook:preview": "npm run storybook:build && http-server ./storybook-static/ --silent",
-    "prepare": "husky"
+    "prepare": "husky",
+    "postinstall": "patch-package"
   },
   "publishConfig": {
     "access": "public"
@@ -47,6 +52,8 @@
     "./cosmoz-component": "./dist/component.js"
   },
   "dependencies": {
+    "@lit-labs/virtualizer": "^2.1.1",
+    "@neovici/cosmoz-spinner": "^1.0.3",
     "@pionjs/pion": "^2.5.2",
     "lit-html": "^3.3.1"
   },
@@ -55,6 +62,7 @@
     "@commitlint/cli": "^21.0.2",
     "@commitlint/config-conventional": "^21.0.2",
     "@neovici/cfg": "^2.15.0",
+    "@neovici/cosmoz-tokens": "^4.14.2",
     "@neovici/testing": "^2.3.0",
     "@playwright/test": "1.60.0",
     "@storybook/addon-docs": "^10.0.0",
@@ -68,6 +76,8 @@
     "husky": "^9.0.0",
     "jsdom": "^29.0.1",
     "lint-staged": "^17.0.7",
+    "patch-package": "^8.0.1",
+    "pdfjs-dist": "^4.10.38",
     "shadow-dom-testing-library": "^1.13.1",
     "sinon": "^22.0.0",
     "storybook": "^10.0.0",
