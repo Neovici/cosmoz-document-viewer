@@ -40,9 +40,29 @@ interface Props {
 	zoom?: number;
 	/** How the zoom factor was chosen: `fit` width-follows the container. */
 	zoomMode?: ZoomMode;
+	/** Suspends the strip's pan/pinch/tap gestures when false — annotation
+	 *  layers own the pointer; wheel and property zoom keep working. */
+	gestures?: boolean;
 }
 
-export type CosmozDocumentViewerElement = HTMLElement & Props;
+/** A region in page unit space: every edge is a 0..1 fraction of the page. */
+export interface RegionRect {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+
+/** `pageAtPoint`'s result: the page index plus the point in unit space,
+ *  and the page's unit box for convenience. */
+export type PagePoint = { page: number } & Required<RegionRect>;
+
+export interface CosmozDocumentViewerElement extends HTMLElement, Props {
+	/** Centers the unit-space region on the viewport. */
+	jumpToRegion(page: number, rect: RegionRect): void;
+	/** The page under a client point, in unit space. */
+	pageAtPoint(x: number, y: number): PagePoint | null;
+}
 
 type Host = CosmozDocumentViewerElement;
 
@@ -171,7 +191,7 @@ const CosmozDocumentViewer = (host: Host) => {
 		pinchBusy,
 		fitZoom,
 	});
-	useDragPan(scrollRef);
+	useDragPan({ scrollRef, enabled: host.gestures !== false });
 	usePinchZoom({
 		scrollRef,
 		pagesRef,
@@ -179,9 +199,62 @@ const CosmozDocumentViewer = (host: Host) => {
 		pageWidthRef,
 		emitZoom,
 		pinchBusy,
+		enabled: host.gestures !== false,
 	});
 
-	// ── document change ──────────────────────────────────────────────────
+	// ── element API: annotation primitives ───────────────────────────────
+
+	// Imperative methods assigned on the host so closures see the current
+	// render's layout; pion components don't declare class methods.
+
+	/** Inverse locator: a client point (viewport coords) projected onto the
+	 *  strip — the page index plus that point in unit space. Null when
+	 *  off-document. Annotation layers draw with this. */
+	host.pageAtPoint = (x: number, y: number) => {
+		const el = scrollRef.current;
+		const pw = pageWidthRef.current;
+		if (!el || !pw) {
+			return null;
+		}
+		const b = el.getBoundingClientRect();
+		const sy = el.scrollTop + y - b.top;
+		if (sy < 0 || sy >= layout.totalHeight) {
+			return null;
+		}
+		const page = layout.pageAt(sy);
+		const pageH = layout.pageHeight(page);
+		const stripW = Math.max(el.clientWidth, pw);
+		const sx = el.scrollLeft + x - b.left - (stripW - pw) / 2;
+		return {
+			page,
+			width: pw,
+			height: pageH,
+			x: sx / pw,
+			y: (sy - layout.positions[page]) / pageH,
+		};
+	};
+
+	/** Lands the unit-space region's center at the viewport's center at
+	 *  the current zoom; page-edge regions clamp instead of overscrolling. */
+	host.jumpToRegion = (page: number, rect: RegionRect) => {
+		const el = scrollRef.current;
+		const pw = pageWidthRef.current;
+		if (!el || !pw || layout.positions[page] == null) {
+			return;
+		}
+		const pageH = layout.pageHeight(page);
+		const cY = layout.positions[page] + (rect.y + rect.height / 2) * pageH;
+		const stripW = Math.max(el.clientWidth, pw);
+		const cX = (stripW - pw) / 2 + (rect.x + rect.width / 2) * pw;
+		el.scrollTop = Math.max(
+			0,
+			Math.min(cY - el.clientHeight / 2, el.scrollHeight - el.clientHeight),
+		);
+		el.scrollLeft = Math.max(
+			0,
+			Math.min(cX - el.clientWidth / 2, el.scrollWidth - el.clientWidth),
+		);
+	};
 
 	// One effect owns the whole document lifecycle: ratio seeds from the
 	// input, natural-width and ready reset, page count reported.

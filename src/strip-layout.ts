@@ -49,6 +49,10 @@ export const stripLayout = (ratios: number[], pageWidth: number) => {
 			from: pageAt(Math.max(y0, 0)),
 			lastInclusive: Math.min(pageAt(Math.max(y1, 0)), ratios.length - 1),
 		}),
+		/** The page's rendered height: its band of the positions' prefix. */
+		pageHeight: (i: number) =>
+			(i + 1 < positions.length ? positions[i + 1] : totalHeight) -
+			positions[i],
 	};
 };
 
