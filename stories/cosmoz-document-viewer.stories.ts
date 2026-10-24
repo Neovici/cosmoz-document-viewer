@@ -165,6 +165,23 @@ export const Showcase: Story = {
 			);
 			const [rect2] = namedSlot.assignedElements();
 			expect(rect2.getBoundingClientRect().height).toBeGreaterThan(0);
+
+			// The preview runs play() on load: leave the demo touchable —
+			// disarm the draw mode (keep the highlight; the bar still shows it).
+			// touch='off' freezes touch-action, and an armed crosshair on a
+			// fresh visit reads as a broken viewer.
+			getDemoEl(canvasElement)
+				?.shadowRoot?.querySelector(
+					'cosmoz-button[label="Toggle highlight mode"]',
+				)
+				?.dispatchEvent(
+					new MouseEvent('click', { bubbles: true, composed: true }),
+				);
+			await until(
+				() => getDemoViewer(canvasElement)?.touch === 'native',
+				5_000,
+				'(play leaves touch=native)',
+			);
 		});
 	},
 };
