@@ -19,6 +19,9 @@ import { roundToStep, ZOOM_IN_STEP, ZOOM_OUT_STEP } from './zoom-model.js';
 
 type ZoomMode = 'fit' | 'manual';
 
+/** Touch ownership for the strip, see `Props.touch`. */
+export type TouchMode = 'native' | 'gestures' | 'off';
+
 /** A page is a ready URL, or a lazy renderer that resolves to one. The
  *  renderer form may carry the page's aspect ratio upfront (PDF loaders
  *  know it before rasterizing), which keeps the layout fully stable on
@@ -40,9 +43,12 @@ interface Props {
 	zoom?: number;
 	/** How the zoom factor was chosen: `fit` width-follows the container. */
 	zoomMode?: ZoomMode;
-	/** Suspends the strip's pan/pinch/tap gestures when false — annotation
-	 *  layers own the pointer; wheel and property zoom keep working. */
-	gestures?: boolean;
+	/** Touch ownership: `'native'` (default) hands scrolling to the browser —
+	 *  compositor momentum and edge bounce, and touch pinch zooms the page.
+	 *  `'gestures'` = JS pan with fling inertia and pinch-zoom on the strip.
+	 *  `'off'` = touch inert so overlay layers own the pointer. Ctrl/Cmd+drag
+	 *  pans except in `'off'`; wheel and property zoom work in every mode. */
+	touch?: TouchMode;
 }
 
 /** A region in page unit space: every edge is a 0..1 fraction of the page. */
@@ -90,9 +96,14 @@ const styles = css`
 		overflow: auto;
 		scrollbar-gutter: stable;
 		padding: 0;
-		/* Touch pan/pinch is app-owned (use-pinch-zoom); fling decay stands
-		 * in for native touch scrolling inertia. */
+		/* JS pan/pinch owns touch in 'gestures'/'off' (use-pinch-zoom; fling
+		 * decay stands in for native inertia). 'native' hands it back to the
+		 * browser — compositor momentum, never races the hooks. */
 		touch-action: none;
+	}
+
+	.scroll-container[data-native-touch] {
+		touch-action: auto;
 	}
 
 	.scroll-container[data-ctrl] {
@@ -191,7 +202,8 @@ const CosmozDocumentViewer = (host: Host) => {
 		pinchBusy,
 		fitZoom,
 	});
-	useDragPan({ scrollRef, enabled: host.gestures !== false });
+	const touch = host.touch ?? 'native';
+	useDragPan({ scrollRef, enabled: touch !== 'off' });
 	usePinchZoom({
 		scrollRef,
 		pagesRef,
@@ -199,7 +211,7 @@ const CosmozDocumentViewer = (host: Host) => {
 		pageWidthRef,
 		emitZoom,
 		pinchBusy,
-		enabled: host.gestures !== false,
+		enabled: touch === 'gestures',
 	});
 
 	// ── element API: annotation primitives ───────────────────────────────
@@ -389,6 +401,7 @@ const CosmozDocumentViewer = (host: Host) => {
 	return html`
 		<div
 			class="scroll-container"
+			?data-native-touch=${touch === 'native'}
 			${ref((el) => {
 				scrollRef.current = el as HTMLElement;
 			})}

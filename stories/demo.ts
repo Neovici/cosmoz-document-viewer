@@ -15,9 +15,22 @@ import {
 	useState,
 } from '@pionjs/pion';
 import { ref } from 'lit-html/directives/ref.js';
-import type { CosmozDocumentViewerElement } from '../src/cosmoz-document-viewer';
+import type {
+	CosmozDocumentViewerElement,
+	TouchMode,
+} from '../src/cosmoz-document-viewer';
 import { roundToStep, ZOOM_IN_STEP, ZOOM_OUT_STEP } from '../src/zoom-model';
 import { loadPdfPages } from './pdf';
+
+const SCROLL_SVG = html`<svg
+	width="16"
+	height="16"
+	viewBox="0 0 24 24"
+	fill="currentColor"
+	slot="icon"
+>
+	<path d="M6 10 12 4l6 6H6zm0 4 6 6 6-6H6z" />
+</svg>`;
 
 const MARKER_SVG = html`<svg
 	width="16"
@@ -168,6 +181,13 @@ const styles = css`
 		background: rgba(255, 221, 0, 0.5);
 		border: 2px solid var(--cz-color-bg-highlight, #3b82f6);
 	}
+
+	/* The touch-mode toggle only says something where touch exists. */
+	@media (pointer: fine) {
+		.touch-toggle {
+			display: none;
+		}
+	}
 		pointer-events: none;
 		user-select: none;
 	}
@@ -221,6 +241,7 @@ const Demo = (host: Host) => {
 	const [loadError, setLoadError] = useState('');
 	const [highlights, setHighlights] = useState<Highlight[]>([]);
 	const [highlightMode, setHighlightMode] = useState(false);
+	const [touchMode, setTouchMode] = useState<TouchMode>('native');
 	const [activeId, setActiveId] = useState<number | null>(null);
 	const [draw, setDrawRender] = useState<{
 		page: number;
@@ -408,7 +429,7 @@ const Demo = (host: Host) => {
 				.pages=${thunks ?? []}
 				.zoomMode=${'fit'}
 				.zoom=${zoom}
-				.gestures=${!highlightMode}
+				.touch=${highlightMode ? 'off' : touchMode}
 				@zoom-changed=${onZoomChanged}
 				@fit-zoom-changed=${(e: CustomEvent) =>
 					setFitZoom(e.detail?.value ?? 0)}
@@ -448,6 +469,18 @@ const Demo = (host: Host) => {
 				: ''}
 			<div class="titlebar">
 				<span class="title">${host.heading ?? 'Document'}</span>
+				<cosmoz-button
+					class="touch-toggle"
+					data-touch-toggle
+					variant=${touchMode === 'gestures' ? 'primary' : 'tertiary'}
+					size="sm"
+					aria-pressed=${touchMode === 'gestures' ? 'true' : 'false'}
+					label="Toggle touch mode"
+					title="Toggle touch mode: native scrolling vs gesture pan/pinch"
+					@click=${() =>
+						setTouchMode(touchMode === 'gestures' ? 'native' : 'gestures')}
+					>${SCROLL_SVG}</cosmoz-button
+				>
 				<cosmoz-button
 					variant=${highlightMode ? 'primary' : 'tertiary'}
 					size="sm"
