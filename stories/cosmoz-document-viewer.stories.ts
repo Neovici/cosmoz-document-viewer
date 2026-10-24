@@ -45,7 +45,11 @@ const meta: Meta = {
 		},
 	},
 	decorators: [
-		(story) => html` <div style="height: 480px; width: 100%">${story()}</div> `,
+		(story) => html`
+			<div style="height: clamp(420px, 85dvh, 800px); width: 100%">
+				${story()}
+			</div>
+		`,
 	],
 };
 
