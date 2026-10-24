@@ -4,6 +4,8 @@
  * events, zoom controls driving the property back, and a resizable viewport
  * showing fit-mode refollow while dragging.
  */
+import '@neovici/cosmoz-button';
+import '@neovici/cosmoz-tokens/semantic';
 import {
 	component,
 	css,
@@ -13,8 +15,21 @@ import {
 	useState,
 } from '@pionjs/pion';
 import { ref } from 'lit-html/directives/ref.js';
+import type { CosmozDocumentViewerElement } from '../src/cosmoz-document-viewer';
 import { roundToStep, ZOOM_IN_STEP, ZOOM_OUT_STEP } from '../src/zoom-model';
 import { loadPdfPages } from './pdf';
+
+const MARKER_SVG = html`<svg
+	width="16"
+	height="16"
+	viewBox="0 0 24 24"
+	fill="currentColor"
+	slot="icon"
+>
+	<path
+		d="M15.8 3.2a2.5 2.5 0 0 1 3.5 0l1.5 1.5a2.5 2.5 0 0 1 0 3.5L11.2 17.8l-5.5 1.1 1.1-5.5 9-10.2z"
+	/>
+</svg>`;
 
 const styles = css`
 	:host {
@@ -140,25 +155,19 @@ const styles = css`
 		);
 	}
 
-	.shell[annotate] {
-		cursor: crosshair;
-	}
-
-	.stamp {
+	.hl {
 		position: absolute;
 		z-index: 1;
-		transform: translate(-50%, -50%) rotate(-8deg);
-		padding: 0.5cqi 1.2cqi;
-		border: 0.35cqi double #b3261e;
-		border-radius: 0.4cqi;
-		color: #b3261e;
-		font-family: 'Courier New', monospace;
-		font-size: clamp(10px, 1.5cqi, 24px);
-		font-weight: 700;
-		letter-spacing: 0.2cqi;
-		text-transform: uppercase;
-		opacity: 0.85;
-		mix-blend-mode: multiply;
+		background: rgba(255, 221, 0, 0.35);
+		border: 1px solid rgba(191, 144, 0, 0.8);
+		border-radius: 2px;
+		pointer-events: none;
+	}
+
+	.hl.active {
+		background: rgba(255, 221, 0, 0.5);
+		border: 2px solid var(--cz-color-bg-highlight, #3b82f6);
+	}
 		pointer-events: none;
 		user-select: none;
 	}
@@ -184,15 +193,19 @@ interface Props {
 	heading?: string;
 	/** Same-origin PDF asset URL. */
 	url?: string;
-	/** Annotation mode: clicking a page drops a review stamp on it. */
+	/** Highlight mode: a marker button arms drawing; drag paints a
+	 *  unit-space yellow rectangle clamped to one page. */
 	annotate?: boolean;
 }
 
-interface Stamp {
+interface Highlight {
 	id: number;
 	page: number;
+	/** Unit space (0..1) — overlays are %-positioned, scale with zoom. */
 	x: number;
 	y: number;
+	width: number;
+	height: number;
 }
 
 type Host = HTMLElement & Props;
@@ -206,9 +219,33 @@ const Demo = (host: Host) => {
 	const [currentPage, setCurrentPage] = useState(0);
 	const [pageCount, setPageCount] = useState(0);
 	const [loadError, setLoadError] = useState('');
-	const [stamps, setStamps] = useState<Stamp[]>([]);
-	const stampId = useRef(0);
+	const [highlights, setHighlights] = useState<Highlight[]>([]);
+	const [highlightMode, setHighlightMode] = useState(false);
+	const [activeId, setActiveId] = useState<number | null>(null);
+	const [draw, setDrawRender] = useState<{
+		page: number;
+		x0: number;
+		y0: number;
+		x1?: number;
+		y1?: number;
+	} | null>(null);
+	const drawRef = useRef<{
+		page: number;
+		x0: number;
+		y0: number;
+		x1?: number;
+		y1?: number;
+	} | null>(null);
+	// Closure state lags a render behind sync event chains (pointer
+	// down→move→up can share one frame) — handlers read the ref, the
+	// state only paints the preview.
+	const setDraw = (d: typeof drawRef.current) => {
+		drawRef.current = d;
+		setDrawRender(d);
+	};
+	const highlightId = useRef(0);
 	const shellRef = useRef<HTMLDivElement>();
+	const viewerRef = useRef<CosmozDocumentViewerElement>();
 
 	useEffect(() => {
 		if (!host.url) return;
@@ -260,35 +297,97 @@ const Demo = (host: Host) => {
 		handle.addEventListener('pointercancel', onUp);
 	};
 
-	const onAnnotate = (e: MouseEvent) => {
-		if (e.target instanceof HTMLElement && e.target.closest('button')) {
+	// ── highlight draw mode ──────────────────────────────────────────────
+
+	/** Reading order (page, then vertical position) for the next/prev walk. */
+	const sorted = () =>
+		[...highlights].sort((a, b) => a.page - b.page || a.y - b.y);
+
+	const jump = (dir: number) => {
+		const viewer = viewerRef.current;
+		if (!viewer || !highlights.length) {
 			return;
 		}
-		const path = e.composedPath();
-		const container = path.find(
-			(el) =>
-				el instanceof HTMLElement &&
-				(el as HTMLElement).classList?.contains('page-container'),
-		) as HTMLElement | undefined;
-		const pageEl = path.find(
-			(el) =>
-				el instanceof HTMLElement &&
-				el.localName === 'cosmoz-document-viewer-page',
-		) as HTMLElement | undefined;
-		const wrapper = pageEl?.parentElement;
-		if (!container || !wrapper?.dataset?.page) return;
+		const list = sorted();
+		const i = list.findIndex((h) => h.id === activeId);
+		let at: number;
+		if (i < 0) {
+			// Nothing active yet: ‹ lands on the last read first, › on the first.
+			at = dir > 0 ? 0 : list.length - 1;
+		} else {
+			at = (i + (dir > 0 ? 1 : -1) + list.length) % list.length;
+		}
+		const h = list[at];
+		// Region centers on the viewport center; page-edge highlights clamp
+		// on the document's boundary instead of overscrolling.
+		setActiveId(h.id);
+		viewer.jumpToRegion(h.page, h);
+	};
 
-		const rect = container.getBoundingClientRect();
-		stampId.current += 1;
-		setStamps([
-			...stamps,
+	const onPointerDown = (e: PointerEvent) => {
+		if (!highlightMode) {
+			return;
+		}
+		// Toolbar clicks bubble through the shell — don't draw from them.
+		if (
+			e.target instanceof Element &&
+			e.target.closest('button, cosmoz-button')
+		) {
+			return;
+		}
+		const viewer = viewerRef.current;
+		const at = viewer?.pageAtPoint(e.clientX, e.clientY);
+		if (!at) {
+			return;
+		}
+		setDraw({ page: at.page, x0: at.x, y0: at.y });
+		try {
+			// Real pointers capture so drags continue outside the shell;
+			// synthetic events (id 0) have no active pointer to capture.
+			shellRef.current?.setPointerCapture(e.pointerId);
+		} catch {
+			/* nothing to capture */
+		}
+	};
+
+	const onPointerMove = (e: PointerEvent) => {
+		const d = drawRef.current;
+		if (!d) {
+			return;
+		}
+		const at = viewerRef.current?.pageAtPoint(e.clientX, e.clientY);
+		// Rects clamp to the page they started on — no cross-page spans,
+		// and a corner dragged past the page edge clamps to the edge.
+		if (!at || at.page !== d.page) {
+			return;
+		}
+		setDraw({
+			...d,
+			x1: Math.min(1, Math.max(0, at.x)),
+			y1: Math.min(1, Math.max(0, at.y)),
+		});
+	};
+
+	const onPointerUp = () => {
+		const d = drawRef.current;
+		if (!d || d.x1 == null) {
+			setDraw(null);
+			return;
+		}
+		const x = Math.min(d.x0, d.x1);
+		const y = Math.min(d.y0, d.y1 ?? 0);
+		setHighlights([
+			...highlights,
 			{
-				id: stampId.current,
-				page: Number(wrapper.dataset.page),
-				x: ((e.clientX - rect.left) / rect.width) * 100,
-				y: ((e.clientY - rect.top) / rect.height) * 100,
+				id: highlightId.current++,
+				page: d.page,
+				x,
+				y,
+				width: Math.abs(d.x1 - d.x0),
+				height: Math.abs((d.y1 ?? 0) - d.y0),
 			},
 		]);
+		setDraw(null);
 	};
 
 	return html`
@@ -297,15 +396,19 @@ const Demo = (host: Host) => {
 		</style>
 		<div
 			class="shell"
-			?annotate=${host.annotate}
-			@click=${host.annotate ? onAnnotate : null}
-			${ref((el) => (shellRef.current = el))}
+			?annotate=${highlightMode}
+			@pointerdown=${onPointerDown}
+			@pointermove=${onPointerMove}
+			@pointerup=${onPointerUp}
+			${ref((el) => (shellRef.current = el as HTMLDivElement))}
 		>
 			<cosmoz-document-viewer
 				style="flex: 1"
+				${ref((el) => (viewerRef.current = el as CosmozDocumentViewerElement))}
 				.pages=${thunks ?? []}
 				.zoomMode=${'fit'}
 				.zoom=${zoom}
+				.gestures=${!highlightMode}
 				@zoom-changed=${onZoomChanged}
 				@fit-zoom-changed=${(e: CustomEvent) =>
 					setFitZoom(e.detail?.value ?? 0)}
@@ -314,17 +417,27 @@ const Demo = (host: Host) => {
 				@page-count-changed=${(e: CustomEvent) =>
 					setPageCount(e.detail?.value ?? 0)}
 			>
-				${(host.annotate ? stamps : []).map(
-					(st) => html`
+				${highlights.map(
+					(h) => html`
 						<span
-							class="stamp"
-							slot="page-${st.page}-overlay"
-							style="left: ${st.x}%; top: ${st.y}%;"
-						>
-							Reviewed
-						</span>
+							class="hl ${h.id === activeId ? 'active' : ''}"
+							slot="page-${h.page}-overlay"
+							style="left: ${h.x * 100}%; top: ${h.y * 100}%; width: ${h.width *
+							100}%; height: ${h.height * 100}%;"
+						></span>
 					`,
 				)}
+				${draw
+					? html`<span
+							class="hl drawing"
+							slot="page-${draw.page}-overlay"
+							style="left: ${Math.min(draw.x0, draw.x1 ?? draw.x0) *
+							100}%; top: ${Math.min(draw.y0, draw.y1 ?? draw.y0) *
+							100}%; width: ${Math.abs((draw.x1 ?? draw.x0) - draw.x0) *
+							100}%; height: ${Math.abs((draw.y1 ?? draw.y0) - draw.y0) *
+							100}%;"
+						></span>`
+					: ''}
 			</cosmoz-document-viewer>
 			${!thunks
 				? html`<div class="loading">
@@ -335,6 +448,45 @@ const Demo = (host: Host) => {
 				: ''}
 			<div class="titlebar">
 				<span class="title">${host.heading ?? 'Document'}</span>
+				<cosmoz-button
+					variant=${highlightMode ? 'primary' : 'tertiary'}
+					size="sm"
+					aria-pressed=${highlightMode ? 'true' : 'false'}
+					label="Toggle highlight mode"
+					title="Highlight mode: drag on a page to draw a rectangle"
+					@click=${() => {
+						setHighlightMode(!highlightMode);
+						setDraw(null);
+					}}
+					>${MARKER_SVG}</cosmoz-button
+				>
+				${highlights.length
+					? html`
+							<cosmoz-button
+								variant="tertiary"
+								size="sm"
+								label="Previous highlight"
+								@click=${() => jump(-1)}
+							>
+								‹
+							</cosmoz-button>
+							<span class="highlight-indicator"
+								>${Math.max(
+									1,
+									sorted().findIndex((h) => h.id === activeId) + 1,
+								)}
+								/ ${highlights.length}</span
+							>
+							<cosmoz-button
+								variant="tertiary"
+								size="sm"
+								label="Next highlight"
+								@click=${() => jump(1)}
+							>
+								›
+							</cosmoz-button>
+						`
+					: ''}
 				<button @click=${() => zoomStep(ZOOM_OUT_STEP)}>−</button>
 				<span class="zoom-pct">${fmtPercent(zoom || fitZoom)}</span>
 				<button @click=${() => zoomStep(ZOOM_IN_STEP)}>+</button>
@@ -344,8 +496,17 @@ const Demo = (host: Host) => {
 				<span class="page-indicator"
 					>${pageCount ? `${currentPage + 1} / ${pageCount}` : ''}</span
 				>
-				${host.annotate && stamps.length
-					? html`<button @click=${() => setStamps([])}>Clear</button>`
+				${highlightMode && highlights.length
+					? html`<cosmoz-button
+							variant="tertiary"
+							size="sm"
+							label="Clear highlights"
+							@click=${() => {
+								setHighlights([]);
+								setActiveId(null);
+							}}
+							>Clear</cosmoz-button
+						>`
 					: ''}
 			</div>
 			<div

@@ -12,20 +12,20 @@ const pdfPages = await loadPdfPages(PDF_URL);
 
 /** Plain deadline-poll. Storybook's waitFor has surprising semantics
  *  (callback throws fail fast; timeouts resolve undefined). */
-const until = async (cond: () => boolean, timeout = 25_000) => {
+const until = async (cond: () => boolean, timeout = 25_000, label = '') => {
 	const deadline = Date.now() + timeout;
 	while (!cond()) {
 		if (Date.now() > deadline) {
-			throw new Error(`condition not met within ${timeout}ms`);
+			throw new Error(`condition not met within ${timeout}ms ${label}`);
 		}
 		await new Promise((r) => setTimeout(r, 100));
 	}
 };
 
+const getDemoEl = (canvasElement: Element) =>
+	canvasElement?.querySelector('cosmoz-document-viewer-demo');
 const getDemoViewer = (canvasElement: Element) =>
-	canvasElement
-		?.querySelector('cosmoz-document-viewer-demo')
-		?.shadowRoot?.querySelector('cosmoz-document-viewer');
+	getDemoEl(canvasElement)?.shadowRoot?.querySelector('cosmoz-document-viewer');
 const getViewer = (canvasElement: Element) =>
 	canvasElement?.querySelector('cosmoz-document-viewer') as
 		| (HTMLElement & { ready: boolean; currentPage: number })
@@ -40,7 +40,7 @@ const meta: Meta = {
 		docs: {
 			description: {
 				component:
-					'Continuously scrolling, zoomable multi-page document viewer built on `@lit-labs/virtualizer`. **The component is the viewer only — no chrome:** you get the virtualized zoomable page strip, the zoom/current-page event contract and per-page overlay slots; toolbars, zoom controls and page readouts are application chrome (the *Showcase* story is a demo shell built on the public API).',
+					'Continuously scrolling, zoomable multi-page document viewer with a bespoke proportional strip layout. **The component is the viewer only — no chrome:** you get the virtualized zoomable page strip, the zoom/current-page event contract and per-page overlay slots; toolbars, zoom controls and page readouts are application chrome (the *Showcase* story is a demo shell built on the public API).',
 			},
 		},
 	},
@@ -54,12 +54,12 @@ export default meta;
 type Story = StoryObj;
 
 export const Showcase: Story = {
-	name: '01 - Showcase (stamp, zoom, resize)',
+	name: '01 - Showcase (highlights, zoom, resize)',
 	parameters: {
 		docs: {
 			description: {
 				story:
-					'What surrounds the viewer is **not the component**: toolbar (zoom controls, fit, page readout), review stamps and the resizable viewport are a demo shell built on the public API — the component itself is the bare viewer strip with no chrome.',
+					'What surrounds the viewer is **not the component**: toolbar (marker mode, highlight next/prev, zoom controls, fit, page readout) and the resizable viewport are a demo shell built on the public API — the component itself is the bare viewer strip with no chrome.',
 			},
 		},
 	},
@@ -78,26 +78,55 @@ export const Showcase: Story = {
 		) as HTMLSlotElement;
 		expect(namedSlot.assignedElements().length).toBe(0);
 
-		await step('Clicking a page adds a stamp overlay', async () => {
-			const container = pageEl.shadowRoot.querySelector('.page-container');
-			const rect = container.getBoundingClientRect();
-			container.dispatchEvent(
-				new MouseEvent('click', {
+		await step('Marker button arms highlight draw mode', async () => {
+			const marker = getDemoEl(canvasElement)?.shadowRoot?.querySelector(
+				'cosmoz-button[aria-pressed]',
+			);
+			marker?.dispatchEvent(
+				new MouseEvent('click', { bubbles: true, composed: true }),
+			);
+			await until(
+				() => getDemoViewer(canvasElement)?.gestures === false,
+				5_000,
+				'(marker toggle arms gestures=false)',
+			);
+		});
+
+		await step('Marquee in highlight mode adds an overlay rect', async () => {
+			const container = pageEl?.shadowRoot?.querySelector('.page-container');
+			const rect = container!.getBoundingClientRect();
+			const shell =
+				getDemoEl(canvasElement)?.shadowRoot?.querySelector('.shell');
+			// Mode first (the marker toggle), then a drag = a rectangle.
+			shell?.dispatchEvent(
+				new PointerEvent('pointerdown', {
 					bubbles: true,
 					composed: true,
-					clientX: rect.left + rect.width * 0.55,
-					clientY: rect.top + rect.height * 0.3,
+					clientX: rect.left + rect.width * 0.4,
+					clientY: rect.top + rect.height * 0.2,
+				}),
+			);
+			shell?.dispatchEvent(
+				new PointerEvent('pointermove', {
+					bubbles: true,
+					composed: true,
+					clientX: rect.left + rect.width * 0.6,
+					clientY: rect.top + rect.height * 0.35,
+				}),
+			);
+			shell?.dispatchEvent(
+				new PointerEvent('pointerup', {
+					bubbles: true,
+					composed: true,
 				}),
 			);
 			await until(
-				() =>
-					namedSlot
-						.assignedElements()
-						.find((el) => el.classList.contains('stamp')) !== undefined,
+				() => namedSlot.assignedElements().length > 0,
 				5_000,
+				'(overlay rect committed)',
 			);
-			const [stamp] = namedSlot.assignedElements();
-			expect(stamp.getBoundingClientRect().height).toBeGreaterThan(0);
+			const [rect2] = namedSlot.assignedElements();
+			expect(rect2.getBoundingClientRect().height).toBeGreaterThan(0);
 		});
 	},
 };
@@ -109,9 +138,10 @@ export const Default: Story = {
 		await until(() => getViewer(canvasElement)?.ready === true);
 		await until(
 			() =>
+				// Rasters are object-URLs since toBlob (data: URLs long-tasked rAF).
 				getFirstPage(getViewer(canvasElement))
 					?.shadowRoot?.querySelector('img')
-					?.src?.includes('data:image/jpeg') === true,
+					?.src?.startsWith('blob:') === true,
 		);
 	},
 };
