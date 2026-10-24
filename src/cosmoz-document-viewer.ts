@@ -11,8 +11,7 @@ import { useProperty } from '@pionjs/pion/lib/use-property';
 import { ref } from 'lit-html/directives/ref.js';
 import { DEFAULT_NATURAL_WIDTH } from './cosmoz-document-viewer-page.js';
 import { DEFAULT_RATIO, stripLayout } from './strip-layout.js';
-import { useDragPan } from './use-drag-pan.js';
-import { usePinchZoom } from './use-pinch-zoom.js';
+import { touchGestures } from './touch-gestures.js';
 import { useZoomAnchor } from './use-zoom-anchor.js';
 import { virtualWindow } from './virtual-window.js';
 import { roundToStep, ZOOM_IN_STEP, ZOOM_OUT_STEP } from './zoom-model.js';
@@ -96,9 +95,9 @@ const styles = css`
 		overflow: auto;
 		scrollbar-gutter: stable;
 		padding: 0;
-		/* JS pan/pinch owns touch in 'gestures'/'off' (use-pinch-zoom; fling
-		 * decay stands in for native inertia). 'native' hands it back to the
-		 * browser — compositor momentum, never races the hooks. */
+		/* JS pan/pinch owns touch in 'gestures'/'off' (the touch-gestures
+		 * directive; its fling decay stands in for native inertia). 'native'
+		 * hands it back to the browser — compositor momentum, no hooks. */
 		touch-action: none;
 	}
 
@@ -156,7 +155,6 @@ const CosmozDocumentViewer = (host: Host) => {
 	// (smaller) layout.
 	const [scrollPos, setScrollPos] = useState({ x: 0, y: 0 });
 	const scrollRef = useRef<HTMLElement>();
-	const pagesRef = useRef<HTMLElement>();
 	const pinchBusy = useRef(false);
 	const lastPublishedRef = useRef(0);
 	const naturalWidthRef = useRef<number>(DEFAULT_NATURAL_WIDTH);
@@ -203,16 +201,6 @@ const CosmozDocumentViewer = (host: Host) => {
 		fitZoom,
 	});
 	const touch = host.touch ?? 'native';
-	useDragPan({ scrollRef, enabled: touch !== 'off' });
-	usePinchZoom({
-		scrollRef,
-		pagesRef,
-		naturalWidthRef,
-		pageWidthRef,
-		emitZoom,
-		pinchBusy,
-		enabled: touch === 'gestures',
-	});
 
 	// ── element API: annotation primitives ───────────────────────────────
 
@@ -406,13 +394,11 @@ const CosmozDocumentViewer = (host: Host) => {
 				scrollRef.current = el as HTMLElement;
 			})}
 			@wheel=${onWheel}
+			${touchGestures({ touch, naturalWidth, pageWidth, emitZoom, pinchBusy })}
 		>
 			<div
 				class="pages"
 				style="min-height: ${layout.totalHeight}px; min-width: ${pageWidth}px"
-				${ref((el) => {
-					pagesRef.current = el as HTMLElement;
-				})}
 			>
 				${virtualWindow({ layout, range, renderItem: renderPage })}
 			</div>

@@ -357,5 +357,49 @@ export const PinchZoom: Story = {
 			const settled = sc.scrollTop;
 			await until(() => sc.scrollTop >= settled, 3_000);
 		});
+
+		await step('Ctrl+drag pans (mouse) without leaving gestures', async () => {
+			const before = { x: sc.scrollLeft, y: sc.scrollTop };
+			// The strip has horizontal overflow from the previous steps.
+			sc.dispatchEvent(
+				new PointerEvent('pointerdown', {
+					pointerId: 10,
+					pointerType: 'mouse',
+					ctrlKey: true,
+					button: 0,
+					clientX: cx,
+					clientY: cy,
+					bubbles: true,
+					composed: true,
+				}),
+			);
+			sc.dispatchEvent(
+				new PointerEvent('pointermove', {
+					pointerId: 10,
+					pointerType: 'mouse',
+					ctrlKey: true,
+					clientX: cx - 60,
+					clientY: cy,
+					bubbles: true,
+					composed: true,
+				}),
+			);
+			sc.dispatchEvent(
+				new PointerEvent('pointerup', {
+					pointerId: 10,
+					pointerType: 'mouse',
+					clientX: cx - 60,
+					clientY: cy,
+					bubbles: true,
+					composed: true,
+				}),
+			);
+			await until(
+				() => sc.scrollLeft !== before.x,
+				5_000,
+				'(ctrl+drag panned)',
+			);
+			expect(sc.getBoundingClientRect().width).toBeGreaterThan(0);
+		});
 	},
 };
