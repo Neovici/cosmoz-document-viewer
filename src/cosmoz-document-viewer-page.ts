@@ -19,6 +19,10 @@ const styles = css`
 		display: block;
 		width: 100%;
 		height: auto;
+		/* Pages are an interaction surface (pan, pinch, drawing): no ghost
+		 * image drags, no text selection, no iOS save-image callout. */
+		user-select: none;
+		-webkit-touch-callout: none;
 		filter: var(--cosmoz-document-viewer-page-filter, none);
 		mix-blend-mode: var(--cosmoz-document-viewer-page-blend-mode, multiply);
 		transition: opacity 0.2s ease;
@@ -150,6 +154,7 @@ const CosmozDocumentViewerPage = (host: Host) => {
 			${url
 				? html`<img
 							src="${url}"
+							draggable="false"
 							@load="${onLoad}"
 							style="width: 100%; height: auto; opacity: ${loaded ? 1 : 0};"
 						/>
