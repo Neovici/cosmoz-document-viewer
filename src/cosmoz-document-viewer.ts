@@ -11,15 +11,11 @@ import { useProperty } from '@pionjs/pion/lib/use-property';
 import { ref } from 'lit-html/directives/ref.js';
 import { DEFAULT_NATURAL_WIDTH } from './cosmoz-document-viewer-page.js';
 import { DEFAULT_RATIO, stripLayout } from './strip-layout.js';
-import { touchGestures } from './touch-gestures.js';
 import { useZoomAnchor } from './use-zoom-anchor.js';
 import { virtualWindow } from './virtual-window.js';
 import { roundToStep, ZOOM_IN_STEP, ZOOM_OUT_STEP } from './zoom-model.js';
 
 type ZoomMode = 'fit' | 'manual';
-
-/** Touch ownership for the strip, see `Props.touch`. */
-export type TouchMode = 'native' | 'gestures' | 'off';
 
 /** A page is a ready URL, or a lazy renderer that resolves to one. The
  *  renderer form may carry the page's aspect ratio upfront (PDF loaders
@@ -42,12 +38,6 @@ interface Props {
 	zoom?: number;
 	/** How the zoom factor was chosen: `fit` width-follows the container. */
 	zoomMode?: ZoomMode;
-	/** Touch ownership: `'native'` (default) hands scrolling to the browser —
-	 *  compositor momentum and edge bounce, and touch pinch zooms the page.
-	 *  `'gestures'` = JS pan with fling inertia and pinch-zoom on the strip.
-	 *  `'off'` = touch inert so overlay layers own the pointer. Ctrl/Cmd+drag
-	 *  pans except in `'off'`; wheel and property zoom work in every mode. */
-	touch?: TouchMode;
 }
 
 /** A region in page unit space: every edge is a 0..1 fraction of the page. */
@@ -95,23 +85,6 @@ const styles = css`
 		overflow: auto;
 		scrollbar-gutter: stable;
 		padding: 0;
-		/* JS pan/pinch owns touch in 'gestures'/'off' (the touch-gestures
-		 * directive; its fling decay stands in for native inertia). 'native'
-		 * hands it back to the browser — compositor momentum, no hooks. */
-		touch-action: none;
-	}
-
-	.scroll-container[data-native-touch] {
-		touch-action: auto;
-	}
-
-	.scroll-container[data-ctrl] {
-		cursor: grab;
-	}
-
-	.scroll-container[data-dragging] {
-		cursor: grabbing;
-		user-select: none;
 	}
 
 	.pages {
@@ -133,10 +106,11 @@ const styles = css`
  * Continuously vertically scrolling document viewer built on a proportional
  * strip layout (`strip-layout`): all pages share one width and positions
  * are prefix sums of per-page aspect ratios, so zooming is exact and
- * anchored restore is closed-form. Page rendering, scroll tracking and pan
- * live here; zoom and the current page are owned by the embedding view and
- * passed as properties — every internal flip (Ctrl+wheel, pinch) is
- * announced with a `zoom-changed` event so the view lifts it into its state.
+ * anchored restore is closed-form. Page rendering and scroll tracking live
+ * here; scrolling is the container's native behavior and zoom plus the
+ * current page are owned by the embedding view and passed as properties —
+ * Ctrl+wheel announces intent with a `zoom-changed` event so the view lifts
+ * it into its state.
  */
 const CosmozDocumentViewer = (host: Host) => {
 	const [naturalWidth, setNaturalWidth] = useState(DEFAULT_NATURAL_WIDTH);
@@ -155,7 +129,6 @@ const CosmozDocumentViewer = (host: Host) => {
 	// (smaller) layout.
 	const [scrollPos, setScrollPos] = useState({ x: 0, y: 0 });
 	const scrollRef = useRef<HTMLElement>();
-	const pinchBusy = useRef(false);
 	const lastPublishedRef = useRef(0);
 	const naturalWidthRef = useRef<number>(DEFAULT_NATURAL_WIDTH);
 	naturalWidthRef.current = naturalWidth;
@@ -197,10 +170,8 @@ const CosmozDocumentViewer = (host: Host) => {
 		scroll: scrollPos,
 		zoom: host.zoom,
 		containerWidth,
-		pinchBusy,
 		fitZoom,
 	});
-	const touch = host.touch ?? 'native';
 
 	// ── element API: annotation primitives ───────────────────────────────
 
@@ -360,7 +331,7 @@ const CosmozDocumentViewer = (host: Host) => {
 	// ── wheel zoom: announce the intent, nothing more ─────────────────────
 
 	const onWheel = (e: WheelEvent) => {
-		if (!e.ctrlKey || pinchBusy.current) return;
+		if (!e.ctrlKey) return;
 		e.preventDefault();
 		if (scrollRef.current) {
 			zoomAnchor.capture(scrollRef.current);
@@ -389,12 +360,11 @@ const CosmozDocumentViewer = (host: Host) => {
 	return html`
 		<div
 			class="scroll-container"
-			?data-native-touch=${touch === 'native'}
+			part="scroll-container"
 			${ref((el) => {
 				scrollRef.current = el as HTMLElement;
 			})}
 			@wheel=${onWheel}
-			${touchGestures({ touch, naturalWidth, pageWidth, emitZoom, pinchBusy })}
 		>
 			<div
 				class="pages"

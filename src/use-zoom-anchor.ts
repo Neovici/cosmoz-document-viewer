@@ -21,7 +21,6 @@ export interface ZoomAnchorConfig {
 	containerWidth: number;
 	/** The zoom that fits the container (the un-owned presentation's zoom). */
 	fitZoom: number | undefined;
-	pinchBusy?: { current?: boolean };
 }
 
 /**
@@ -36,7 +35,6 @@ export const useZoomAnchor = ({
 	zoom,
 	fitZoom,
 	containerWidth,
-	pinchBusy,
 }: ZoomAnchorConfig) => {
 	const zoomRef = useRef(zoom);
 	zoomRef.current = zoom;
@@ -69,10 +67,6 @@ export const useZoomAnchor = ({
 		// capture before updating the applied-zoom cursor.
 		const previousZoom = zoomPropRef.current ?? fitZoom ?? zoom;
 		zoomPropRef.current = zoom;
-		if (pinchBusy?.current) {
-			// The pinch's bake owns this echo; its closed form is exact.
-			return;
-		}
 		if (containerWidth === 0) return;
 
 		if (!zoomAnchorRef.current && scrollRef.current) {

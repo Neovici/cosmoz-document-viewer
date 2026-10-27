@@ -19,7 +19,7 @@ const styles = css`
 		display: block;
 		width: 100%;
 		height: auto;
-		/* Pages are an interaction surface (pan, pinch, drawing): no ghost
+		/* Pages are an interaction surface (panning, drawing): no ghost
 		 * image drags, no text selection, no iOS save-image callout. */
 		user-select: none;
 		-webkit-touch-callout: none;

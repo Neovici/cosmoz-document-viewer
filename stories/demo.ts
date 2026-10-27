@@ -15,21 +15,9 @@ import {
 	useState,
 } from '@pionjs/pion';
 import { ref } from 'lit-html/directives/ref.js';
-import type {
-	CosmozDocumentViewerElement,
-	TouchMode,
-} from '../src/cosmoz-document-viewer';
+import type { CosmozDocumentViewerElement } from '../src/cosmoz-document-viewer';
 import { roundToStep, ZOOM_IN_STEP, ZOOM_OUT_STEP } from '../src/zoom-model';
 import { loadPdfPages } from './pdf';
-
-const SCROLL_SVG = html`<svg
-	width="16"
-	height="16"
-	viewBox="0 0 24 24"
-	fill="currentColor"
->
-	<path d="M6 10 12 4l6 6H6zm0 4 6 6 6-6H6z" />
-</svg>`;
 
 const MARKER_SVG = html`<svg
 	width="16"
@@ -57,6 +45,13 @@ const styles = css`
 		border-radius: 8px;
 		box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
 		background: var(--cz-color-bg-tertiary, #eee);
+	}
+
+	/* While the draw mode is armed, the viewer's scroller stands down:
+	 * touch-action is decided at gesture start, so drawing on touch needs
+	 * the handoff — otherwise native scrolling owns the gesture. */
+	cosmoz-document-viewer[data-draw-armed]::part(scroll-container) {
+		touch-action: none;
 	}
 
 	.titlebar {
@@ -289,7 +284,6 @@ const Demo = (host: Host) => {
 	const [loadError, setLoadError] = useState('');
 	const [highlights, setHighlights] = useState<Highlight[]>([]);
 	const [highlightMode, setHighlightMode] = useState(false);
-	const [touchMode, setTouchMode] = useState<TouchMode>('native');
 	const [activeId, setActiveId] = useState<number | null>(null);
 	const [draw, setDrawRender] = useState<{
 		page: number;
@@ -477,7 +471,7 @@ const Demo = (host: Host) => {
 				.pages=${thunks ?? []}
 				.zoomMode=${'fit'}
 				.zoom=${zoom}
-				.touch=${highlightMode ? 'off' : touchMode}
+				?data-draw-armed=${highlightMode}
 				@zoom-changed=${onZoomChanged}
 				@fit-zoom-changed=${(e: CustomEvent) =>
 					setFitZoom(e.detail?.value ?? 0)}
@@ -517,18 +511,6 @@ const Demo = (host: Host) => {
 				: ''}
 			<div class="titlebar">
 				<span class="title">${host.heading ?? 'Document'}</span>
-				<cosmoz-button
-					class="touch-toggle"
-					data-touch-toggle
-					variant=${touchMode === 'gestures' ? 'primary' : 'tertiary'}
-					size="sm"
-					aria-pressed=${touchMode === 'gestures' ? 'true' : 'false'}
-					label="Toggle touch mode"
-					title="Toggle touch mode: native scrolling vs gesture pan/pinch"
-					@click=${() =>
-						setTouchMode(touchMode === 'gestures' ? 'native' : 'gestures')}
-					>${SCROLL_SVG}</cosmoz-button
-				>
 				<button @click=${() => zoomStep(ZOOM_OUT_STEP)}>−</button>
 				<span class="zoom-pct">${fmtPercent(zoom || fitZoom)}</span>
 				<button @click=${() => zoomStep(ZOOM_IN_STEP)}>+</button>

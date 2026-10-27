@@ -82,44 +82,6 @@ export const Showcase: Story = {
 		) as HTMLSlotElement;
 		expect(namedSlot.assignedElements().length).toBe(0);
 
-		await step('Touch mode defaults to native scrolling', async () => {
-			const v = getDemoViewer(canvasElement);
-			expect(v?.touch).toBe('native');
-			expect(
-				getComputedStyle(v!.shadowRoot.querySelector('.scroll-container')!)
-					.touchAction,
-			).toBe('auto');
-		});
-
-		await step('Touch toggle flips native ↔ gesture scrolling', async () => {
-			const toggle = () =>
-				getDemoEl(canvasElement)?.shadowRoot?.querySelector(
-					'cosmoz-button[data-touch-toggle]',
-				);
-			const sc = () =>
-				getDemoViewer(canvasElement)?.shadowRoot?.querySelector(
-					'.scroll-container',
-				);
-			toggle()?.dispatchEvent(
-				new MouseEvent('click', { bubbles: true, composed: true }),
-			);
-			await until(
-				() => getDemoViewer(canvasElement)?.touch === 'gestures',
-				5_000,
-				'(touch=gestures)',
-			);
-			expect(getComputedStyle(sc()!).touchAction).toBe('none');
-			toggle()?.dispatchEvent(
-				new MouseEvent('click', { bubbles: true, composed: true }),
-			);
-			await until(
-				() => getDemoViewer(canvasElement)?.touch === 'native',
-				5_000,
-				'(touch=native)',
-			);
-			expect(getComputedStyle(sc()!).touchAction).toBe('auto');
-		});
-
 		await step('Marker button arms highlight draw mode', async () => {
 			const marker = getDemoEl(canvasElement)?.shadowRoot?.querySelector(
 				'cosmoz-button[label="Toggle highlight mode"]',
@@ -127,10 +89,22 @@ export const Showcase: Story = {
 			marker?.dispatchEvent(
 				new MouseEvent('click', { bubbles: true, composed: true }),
 			);
+			// Armed = the scroller hands the pointer over (the draw layer owns
+			// touch-action through the part, since it's decided at gesture start).
 			await until(
-				() => getDemoViewer(canvasElement)?.touch === 'off',
+				() => {
+					const sc =
+						getDemoViewer(canvasElement)?.shadowRoot?.querySelector(
+							'.scroll-container',
+						);
+					return (
+						marker?.getAttribute('aria-pressed') === 'true' &&
+						sc != null &&
+						getComputedStyle(sc).touchAction === 'none'
+					);
+				},
 				5_000,
-				'(marker arms touch=off)',
+				'(armed: scroller hands the pointer over)',
 			);
 		});
 
@@ -170,10 +144,10 @@ export const Showcase: Story = {
 			const [rect2] = namedSlot.assignedElements();
 			expect(rect2.getBoundingClientRect().height).toBeGreaterThan(0);
 
-			// The preview runs play() on load: leave the demo touchable —
-			// disarm the draw mode (keep the highlight; the bar still shows it).
-			// touch='off' freezes touch-action, and an armed crosshair on a
-			// fresh visit reads as a broken viewer.
+			// The preview runs play() on load: leave the demo in a neutral,
+			// touchable state — disarm the draw mode (keep the highlight; the
+			// bar still shows it). An armed crosshair on a fresh visit reads
+			// as a broken viewer.
 			getDemoEl(canvasElement)
 				?.shadowRoot?.querySelector(
 					'cosmoz-button[label="Toggle highlight mode"]',
@@ -182,9 +156,14 @@ export const Showcase: Story = {
 					new MouseEvent('click', { bubbles: true, composed: true }),
 				);
 			await until(
-				() => getDemoViewer(canvasElement)?.touch === 'native',
+				() =>
+					getDemoEl(canvasElement)
+						?.shadowRoot?.querySelector(
+							'cosmoz-button[label="Toggle highlight mode"]',
+						)
+						?.getAttribute('aria-pressed') === 'false',
 				5_000,
-				'(play leaves touch=native)',
+				'(play leaves draw disarmed)',
 			);
 		});
 	},
@@ -247,7 +226,6 @@ const spyPages = Array.from({ length: 60 }, (_, i) => () => {
 	rasterCalls.push(i);
 	return Promise.resolve(svgPage(i));
 });
-const touchPages = Array.from({ length: 40 }, (_, i) => svgPage(i));
 
 export const LazyRenders: Story = {
 	name: 'Lazy rendering (spy)',
@@ -267,160 +245,6 @@ export const LazyRenders: Story = {
 			await until(() => Math.max(...rasterCalls) > 55, 10_000);
 			// Still bounded — the strip resolves per range, never the document.
 			expect(rasterCalls.length).toBeLessThan(35);
-		});
-	},
-};
-
-/** Bare viewer that echoes `zoom-changed` back into `zoom` (as a real view
- *  would), plus synthetic touch-pointer sequences for pinch and fling. */
-export const PinchZoom: Story = {
-	name: 'Pinch zoom + touch pan (spy)',
-	parameters: { excludeFromSidebar: true },
-	render: () =>
-		html`<cosmoz-document-viewer
-			.pages=${touchPages}
-			@zoom-changed=${({ target, detail }: CustomEvent<{ value: number }>) => {
-				(target as HTMLElement & { zoom: number }).zoom = detail.value;
-			}}
-		></cosmoz-document-viewer>`,
-	play: async ({ canvasElement, step }) => {
-		await until(() => getViewer(canvasElement)?.ready === true);
-		const viewer = getViewer(canvasElement);
-		// Default touch ownership is native; arm the JS gesture model the
-		// steps below drive. The touch-action flip = the rebind is live.
-		viewer.touch = 'gestures';
-		const sc = viewer.shadowRoot.querySelector('.scroll-container');
-		await until(
-			() => getComputedStyle(sc).touchAction === 'none',
-			5_000,
-			'(gesture hooks armed)',
-		);
-		const strip = viewer.shadowRoot.querySelector('.pages') as HTMLElement;
-		const rect = sc.getBoundingClientRect();
-		const cx = rect.left + rect.width / 2;
-		const cy = rect.top + Math.min(rect.height / 2, 130);
-		const gesture = (id: number, type: string, x: number, y: number) =>
-			sc.dispatchEvent(
-				new PointerEvent(type, {
-					pointerId: id,
-					pointerType: 'touch',
-					isPrimary: id === 1,
-					clientX: x,
-					clientY: y,
-					bubbles: true,
-					composed: true,
-				}),
-			);
-
-		const startPresentation =
-			sc.querySelector('cosmoz-document-viewer-page')?.getBoundingClientRect()
-				.width / 1240;
-		const startZoom = viewer.zoom ?? startPresentation;
-
-		await step('Two fingers apart zoom in and land rounded', async () => {
-			// 80 → 96 px separation (×1.2): 0.75-ish presentation → 0.9.
-			gesture(1, 'pointerdown', cx - 40, cy);
-			gesture(2, 'pointerdown', cx + 40, cy);
-			for (let i = 1; i <= 8; i++) {
-				gesture(1, 'pointermove', cx - 40 - i * 2, cy);
-				gesture(2, 'pointermove', cx + 40 + i * 2, cy);
-			}
-			gesture(2, 'pointerup', cx + 56, cy);
-			gesture(1, 'pointerup', cx - 56, cy);
-			await until(() => (viewer.zoom ?? startZoom) >= startZoom * 1.03, 5_000);
-			// The committed zoom is inside the raster-fidelity bound: from
-			// fit it grows past the start presentation (capped at the
-			// raster's width on wide canvases).
-			expect(viewer.zoom).toBeGreaterThanOrEqual(startZoom * 1.03);
-			expect(viewer.zoom).toBeLessThanOrEqual(1.001);
-			// Pages wider than the viewport: real horizontal overflow.
-			await until(() => sc.scrollWidth > sc.clientWidth, 5_000);
-			// The transient transform was dropped after the bake.
-			await until(() => ['', 'none'].includes(strip.style.transform), 5_000);
-			// Real fingers never arrive inside a gesture's bake window; pace
-			// steps apart so each gesture starts with an idle strip.
-			await new Promise((done) => setTimeout(done, 700));
-		});
-
-		await step('Fingers together shrink back to the fit floor', async () => {
-			const fitted = viewer.zoom;
-			// 96 → 56 px separation (×0.583): below fit — rubber band, then
-			// the commit clamps to the fit presentation.
-			gesture(1, 'pointerdown', cx - 48, cy);
-			gesture(2, 'pointerdown', cx + 48, cy);
-			for (let i = 1; i <= 10; i++) {
-				gesture(1, 'pointermove', cx - 48 + i * 4, cy);
-				gesture(2, 'pointermove', cx + 48 - i * 4, cy);
-			}
-			gesture(2, 'pointerup', cx + 8, cy);
-			gesture(1, 'pointerup', cx - 8, cy);
-			await until(() => (viewer.zoom ?? 1) <= fitted - 0.03, 5_000);
-			await until(() => ['', 'none'].includes(strip.style.transform), 5_000);
-			await new Promise((done) => setTimeout(done, 700));
-		});
-
-		await step('One-finger flick pans the strip with inertia', async () => {
-			await new Promise((done) => requestAnimationFrame(done));
-			viewer.zoom = 1; // native size: room for vertical overscroll
-			await until(() => sc.scrollHeight > sc.clientHeight, 5_000);
-			const before = sc.scrollTop;
-			gesture(1, 'pointerdown', cx, cy + 200);
-			await new Promise((done) => setTimeout(done, 50));
-			for (let i = 1; i <= 5; i++) {
-				gesture(1, 'pointermove', cx, cy + 200 - i * 40);
-				await new Promise((done) => setTimeout(done, 50));
-			}
-			gesture(1, 'pointerup', cx, cy);
-			// Fling continues past the last move position.
-			await until(() => sc.scrollTop > before + 150, 4_000);
-			// ...and decays: two later reads settle to the same position.
-			await new Promise((d) => setTimeout(d, 200));
-			const settled = sc.scrollTop;
-			await until(() => sc.scrollTop >= settled, 3_000);
-		});
-
-		await step('Ctrl+drag pans (mouse) without leaving gestures', async () => {
-			const before = { x: sc.scrollLeft, y: sc.scrollTop };
-			// The strip has horizontal overflow from the previous steps.
-			sc.dispatchEvent(
-				new PointerEvent('pointerdown', {
-					pointerId: 10,
-					pointerType: 'mouse',
-					ctrlKey: true,
-					button: 0,
-					clientX: cx,
-					clientY: cy,
-					bubbles: true,
-					composed: true,
-				}),
-			);
-			sc.dispatchEvent(
-				new PointerEvent('pointermove', {
-					pointerId: 10,
-					pointerType: 'mouse',
-					ctrlKey: true,
-					clientX: cx - 60,
-					clientY: cy,
-					bubbles: true,
-					composed: true,
-				}),
-			);
-			sc.dispatchEvent(
-				new PointerEvent('pointerup', {
-					pointerId: 10,
-					pointerType: 'mouse',
-					clientX: cx - 60,
-					clientY: cy,
-					bubbles: true,
-					composed: true,
-				}),
-			);
-			await until(
-				() => sc.scrollLeft !== before.x,
-				5_000,
-				'(ctrl+drag panned)',
-			);
-			expect(sc.getBoundingClientRect().width).toBeGreaterThan(0);
 		});
 	},
 };
