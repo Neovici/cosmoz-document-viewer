@@ -75,6 +75,7 @@ const styles = css`
 		background: rgba(20, 20, 20, 0.72);
 		backdrop-filter: blur(8px);
 		box-shadow: 0 2px 12px rgba(0, 0, 0, 0.28);
+		color-scheme: dark;
 		color: #fff;
 		font-family: system-ui, sans-serif;
 		font-size: 13px;
@@ -125,6 +126,9 @@ const styles = css`
 		background: rgba(20, 20, 20, 0.72);
 		backdrop-filter: blur(8px);
 		box-shadow: 0 2px 12px rgba(0, 0, 0, 0.28);
+		/* Dark glass chrome: cosmoz-button tokens resolve light-dark() here.
+		 * Without it the icon buttons render near-black on the dark pill. */
+		color-scheme: dark;
 		z-index: 2;
 	}
 	.annotation-bar[data-armed] {
