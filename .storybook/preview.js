@@ -1,3 +1,4 @@
+import '@neovici/cosmoz-tokens';
 import { within as withinShadow } from 'shadow-dom-testing-library';
 
 export default {
